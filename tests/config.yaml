@@ -1,0 +1,5 @@
+sign:
+  - remote: conancenter
+    references: **/**@**/**
+    private_key: keys/ec_private.pem
+    public_key: keys/ec_public.pem
