@@ -289,7 +289,7 @@ def test_sigstore_should_sign_and_get_sign_keys():
 
 
 def test_sigstore_should_verify_and_get_verify_key():
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "extensions", "plugins", "sign")))
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     from extensions.plugins.sign.sign_sigstore import _should_verify, _get_verify_key
 
     config = {
