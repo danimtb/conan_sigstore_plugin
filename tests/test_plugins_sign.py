@@ -52,13 +52,14 @@ def stop_conan_server(server_process):
     Stops the given conan_server process.
     """
     if not server_process:
+        print("SERVER")
         return
     if server_process.poll() is None:  # Check if the process is still running
         os.kill(server_process.pid, signal.SIGTERM)
         server_process.wait()  # Wait for the process to terminate
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def conan_test_with_conan_server():
     old_env = dict(os.environ)
     env_vars = {"CONAN_HOME": tempfile.mkdtemp(suffix='conans'),
@@ -67,7 +68,7 @@ def conan_test_with_conan_server():
     current = tempfile.mkdtemp(suffix="conans")
     cwd = os.getcwd()
     os.chdir(current)
-    run("pip install conan_server")
+    run("pip install conan_server -U")
     server_port = randint(9300, 9500)
     server_process = run_conan_server(env_vars["CONAN_SERVER_HOME"], server_port)
     run(f"conan remote add conan_server http://localhost:{server_port}")
@@ -83,7 +84,7 @@ def conan_test_with_conan_server():
         stop_conan_server(server_process)
 
 
-def test_example():
+def test_example(conan_test_with_conan_server):
     """
     Test plugins/sign/sign_example.py from Conan documentation
     """
@@ -100,7 +101,7 @@ def test_example():
     run("conan profile detect")
     run("conan new cmake_lib -d name=mypkg -d version=1.0 --force")
     run("conan create .")
-    out = run("conan upload * -r=conan_server -c")
+    out = run("conan upload mypkg/1.0 -r=conan_server -c")
 
     assert "Signing ref:  mypkg/1.0" in out
     assert "Signing ref:  mypkg/1.0:4d8ab52ebb49f51e63d5193ed580b5a7672e23d5" in out
@@ -113,13 +114,18 @@ def test_example():
     assert "VERIFYING  conanfile.py" in out
     assert "VERIFYING  conan_sources.tgz" not in out  # Sources not retrieved now
     # Let's force the retrieval of the sources
-    out = run("conan install --requires=mypkg/1.0 --build=*")
+    out = run("conan install --requires=mypkg/1.0 --build=* -r=conan_server")
     assert "Verifying ref:  mypkg/1.0" in out
     assert "VERIFYING  conanfile.py" not in out  # It doesn't re-verify previous contents
     assert "VERIFYING  conan_sources.tgz" in out
 
 
-def test_sigstore():
+def test_pytest_runs(conan_test_with_conan_server):
+    print("run test_pytest_runs")
+    assert True
+
+
+def test_sigstore(conan_test_with_conan_server):
     """
     Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
 
@@ -289,7 +295,6 @@ def test_sigstore_should_sign_and_get_sign_keys():
 
 
 def test_sigstore_should_verify_and_get_verify_key():
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     from extensions.plugins.sign.sign_sigstore import _should_verify, _get_verify_key
 
     config = {
