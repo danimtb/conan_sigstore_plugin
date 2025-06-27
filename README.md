@@ -1,38 +1,39 @@
-# conan_sigstore_plugin
+# Conan Sigstore Plugin
 
-Plugin for signing Conan packages using the Sigstore tools
+Plugin for signing Conan packages using the Sigstore tools.
 
-Sigstore tools:
+The goal of this plugin is to serve as a base example on how to implement a plugin for signing and verifying Conan
+packages, in this case, leveraging the tools provided by sigstore such as Cosign and Rekor.
 
-- Fulcio: Code-signing certificate authority, issuing short-lived certificates to an authenticated identity and publishing them to a certificate transparency log.
+Feel free to clone this repo and modify the plugin with you own needs.
 
-- Cosign: For signing and verification of artifacts and containers, with storage in an Open Container Initiative (OCI) registry, making signatures and in-toto/SLSA attestations invisible infrastructure.
+**Sigstore tools:**
 
-- Rekor: Append-only, auditable transparency log service, Rekor records signed metadata to a ledger that can be queried, but can’t be tampered with.
+- **Cosign:** For signing and verification of artifacts and containers, with storage in an Open Container Initiative (OCI)
+  registry, making signatures and in-toto/SLSA attestations invisible infrastructure.
 
-
-How it works:
-
-Signing:
-  1. It creates a .sig for every package file, using openssl anf placing them in the metadata/signature folder (it is the uploaded with the artifact).
-  2. It registers the signed package in the rekor log.
-
-Verifying:
-  1. The .sig file is verified against rekor log.
-
-The plugin is currently using:
-
-For signing packages:
-    - openssl
-    - Rekor (optional)
-
-For verifying packages:
-
-    - openssl (todo)
-    - Rekor (optional)
+- **Rekor:** Append-only, auditable transparency log service, Rekor records signed metadata to a ledger that can be 
+  queried, but can’t be tampered with.
 
 
-Demo:
+## How does the plugin work?
+
+
+When the packages are prepared for the upload (`conan upload`), the packages are signed following this process:
+  1. It creates a `files-sha256.txt` summary file with the files and their hashes. It is stored in the metadata/signature folder. 
+  2. It creates a `files-sha256.txt.sig` signature file using `cosign`. It is stored in the metadata/signature folder.
+  3. The files at metadata/signature folder are then uploaded alongside the package artifacts.
+  2. If rekor is enabled, the signature of the package is registered against the rekor public log.
+
+When the packages are installed (`conan install`) or when they are integrity-checked in the cache
+(`conan cache check-integrity`), the packages are verified following this process:
+
+  1. The `files-sha256.txt.sig` is verified using `cosign` against the public key provided.
+  2. If rekor is enabled, the signature of the package is also verified against the rekor public log.
+
+
+## Demo
+
 
 conan new cmake_lib -d name=danimtblib -d version=1.0.0
 conan create .
