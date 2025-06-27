@@ -1,179 +1,109 @@
-import subprocess
-import sys
 import tempfile
 import textwrap
-import time
 import os
-import signal
-from random import randint
+import re
 
 import pytest
 
 from tools import run, save
 
 
-def run_conan_server(server_home, server_port):
-    """
-    Starts a conan_server in a non-blocking way and returns the process.
-    """
-    server_conf = textwrap.dedent(f"""
-        [server]
-        jwt_secret: XlDDYgiCfvxHOoGyKsLXfHRF
-        jwt_expire_minutes: 120
-        ssl_enabled: False
-        port: {server_port}
-        host_name: localhost
-        authorize_timeout: 1800
-        disk_storage_path: ./data
-        disk_authorize_timeout: 1800
-        updown_secret: LqeuqTEdPwFsBUELXukaOSes
-
-        [write_permissions]
-        */*@*/*: *
-
-        [read_permissions]
-        */*@*/*: *
-
-        [users]
-        demo: demo
-        """)
-    save(os.path.join(server_home, "server.conf"), server_conf)
-    server_process = subprocess.Popen(
-        ["conan_server"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-    time.sleep(2)  # Give the server some time to start
-    return server_process
-
-
-def stop_conan_server(server_process):
-    """
-    Stops the given conan_server process.
-    """
-    if not server_process:
-        print("SERVER")
-        return
-    if server_process.poll() is None:  # Check if the process is still running
-        os.kill(server_process.pid, signal.SIGTERM)
-        server_process.wait()  # Wait for the process to terminate
-
-
 @pytest.fixture
-def conan_test_with_conan_server():
-    old_env = dict(os.environ)
-    env_vars = {"CONAN_HOME": tempfile.mkdtemp(suffix='conans'),
-                "CONAN_SERVER_HOME": tempfile.mkdtemp(suffix='conanserver')}
-    os.environ.update(env_vars)
-    current = tempfile.mkdtemp(suffix="conans")
-    cwd = os.getcwd()
-    os.chdir(current)
-    run("pip install conan_server -U")
-    server_port = randint(9300, 9500)
-    server_process = run_conan_server(env_vars["CONAN_SERVER_HOME"], server_port)
-    run(f"conan remote add conan_server http://localhost:{server_port}")
-    run("conan remote login conan_server demo -p demo")
-    run("conan remove * -c -r conan_server")
-    try:
-        yield
-    finally:
-        run("conan remove * -c -r conan_server")
-        os.chdir(cwd)
-        os.environ.clear()
-        os.environ.update(old_env)
-        stop_conan_server(server_process)
-
-
-def test_example(conan_test_with_conan_server):
-    """
-    Test plugins/sign/sign_example.py from Conan documentation
-    """
-    # Install plugin
-    repo = os.path.join(os.path.dirname(__file__), "..")
-    run(f"conan config install {repo}")
-    conan_home = os.environ["CONAN_HOME"]
-    base_path = os.path.join(conan_home, "extensions", "plugins", "sign")
-    old_path = os.path.join(base_path, "sign_example.py")
-    new_path = os.path.join(base_path, "sign.py")
-    os.rename(old_path, new_path)
-
-    # Run the tests
-    run("conan profile detect")
-    run("conan new cmake_lib -d name=mypkg -d version=1.0 --force")
-    run("conan create .")
-    out = run("conan upload mypkg/1.0 -r=conan_server -c")
-
-    assert "Signing ref:  mypkg/1.0" in out
-    assert "Signing ref:  mypkg/1.0:4d8ab52ebb49f51e63d5193ed580b5a7672e23d5" in out
-    # Make sure it is signing the sources too
-    assert "Signing files:  ['conan_package.tgz', 'conaninfo.txt', 'conanmanifest.txt']" in out
-    run("conan remove mypkg/* -c")
-    out = run("conan install --requires=mypkg/1.0 -r=conan_server")
-    assert "Verifying ref:  mypkg/1.0" in out
-    assert "Verifying ref:  mypkg/1.0:4d8ab52ebb49f51e63d5193ed580b5a7672e23d5" in out
-    assert "VERIFYING  conanfile.py" in out
-    assert "VERIFYING  conan_sources.tgz" not in out  # Sources not retrieved now
-    # Let's force the retrieval of the sources
-    out = run("conan install --requires=mypkg/1.0 --build=* -r=conan_server")
-    assert "Verifying ref:  mypkg/1.0" in out
-    assert "VERIFYING  conanfile.py" not in out  # It doesn't re-verify previous contents
-    assert "VERIFYING  conan_sources.tgz" in out
-
-
-def test_pytest_runs(conan_test_with_conan_server):
-    print("run test_pytest_runs")
-    assert True
-
-
-def test_sigstore(conan_test_with_conan_server):
-    """
-    Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
-
-    Following env vars should be defined to run the test:
-        - CONAN_SIGSTORE_DISABLE_REKOR: Enable or disable rekor to test locally (disabled by default in the test for CI)
-    """
+def conan_test_package_signing():
     # Prepare environment vars
-    base_path = os.path.join(os.getenv("CONAN_HOME"), "keys")
-    os.makedirs(base_path)
-    conan_sigstore_privkey = os.path.join(base_path, "ec_private.pem").replace("\\", "/")
-    conan_sigstore_pubkey = os.path.join(base_path, "ec_public.pem").replace("\\", "/")
-    run(f"openssl ecparam -genkey -name prime256v1 > {conan_sigstore_privkey}")
-    run(f"openssl ec -in {conan_sigstore_privkey} -pubout > {conan_sigstore_pubkey}")
-    env_vars = {"CONAN_SIGSTORE_DISABLE_REKOR": "1"}
+    conan_home = tempfile.mkdtemp(suffix='conans')
+    old_env = dict(os.environ)
+    env_vars = {"CONAN_HOME": conan_home,
+                "CONAN_SIGSTORE_DISABLE_REKOR": "1",
+                "COSIGN_PASSWORD": "kkk"}
     os.environ.update(env_vars)
+
+    # Prepare signing keys
+    conan_sigstore_key = os.path.join(conan_home, "key").replace("\\", "/")
+    conan_sigstore_privkey = f"{conan_sigstore_key}.key"
+    conan_sigstore_pubkey = f"{conan_sigstore_key}.pub"
+    run(f"cosign generate-key-pair --output-key-prefix {conan_sigstore_key}")
 
     # Install plugin
     repo = os.path.join(os.path.dirname(__file__), "..")
     run(f"conan config install {repo}")
-    conan_home = os.environ["CONAN_HOME"]
     base_path = os.path.join(conan_home, "extensions", "plugins", "sign")
     old_path = os.path.join(base_path, "sign_sigstore.py")
     new_path = os.path.join(base_path, "sign.py")
     os.rename(old_path, new_path)
     config_path = os.path.join(base_path, "sigstore_config.yaml")
     save(config_path, textwrap.dedent(f"""
-        sign:
-          - remote: "**"
-            references: "**/**@**/**"
-            private_key: "{conan_sigstore_privkey}"
-            public_key: "{conan_sigstore_pubkey}"
-        
-        verify:
-          - remote: "**"
-            references: "**/**@**/**"
-            public_key: "{conan_sigstore_pubkey}"
-    """))
+            sign:
+              - remote: "**"
+                references: "**/**@**/**"
+                private_key: "{conan_sigstore_privkey}"
+                public_key: "{conan_sigstore_pubkey}"
 
-    # Run the tests
+            verify:
+              - remote: "**"
+                references: "**/**@**/**"
+                public_key: "{conan_sigstore_pubkey}"
+        """))
+
+    #Prepate test files
+    current = tempfile.mkdtemp(suffix="conans")
+    cwd = os.getcwd()
+    os.chdir(current)
     run("conan profile detect")
-    run("conan new cmake_lib -d name=mypkg2 -d version=1.0 --force")
+    run("conan new header_lib -d name=mypkg -d version=1.0 --force")
     run("conan create .")
-    out = run("conan upload mypkg2/1.0 -r=conan_server -c")
+
+    try:
+        yield
+    finally:
+        #run("conan remove * -c")
+        os.chdir(cwd)
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_sigstore_check_integrity(conan_test_package_signing):
+    """
+    Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
+
+    Following env vars should be defined to run the test:
+        - CONAN_SIGSTORE_DISABLE_REKOR: Enable or disable rekor to test locally (disabled by default in the test for CI)
+    """
+    out = run("conan cache check-integrity mypkg/1.0")
+    # The package is still not signed
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: WARN: Could not verify unsigned package" in out
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
+           "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
+
+    out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run --force")
+    assert "Signing artifacts" in out
+    # The package is now signed after the upload
+    out = run("conan cache check-integrity mypkg/1.0")
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Package signature verification: ok" in out
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
+           "#4a12a155a57785a80d517f75dafee98e: Package signature verification: ok" in out
+
+    run("conan install --requires mypkg/1.0 --build mypkg/1.0")
+    out = run("conan cache check-integrity mypkg/1.0")
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Package signature verification: ok" in out
+    # New built package revision has not been signed
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
+           "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
+
+
+def test_sigstore(conan_test_package_signing):
+    """
+    Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
+
+    Following env vars should be defined to run the test:
+        - CONAN_SIGSTORE_DISABLE_REKOR: Enable or disable rekor to test locally (disabled by default in the test for CI)
+    """
+    out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run")
     assert "Signing artifacts" in out
 
-    run("conan remove * -c")
-    out = run("conan install --requires mypkg2/1.0 -r=conan_server")
-    assert "Verifying artifacts from" in out
+    # out = run("conan install --requires mypkg/1.0 -r=conancenter")
+    out = run("conan cache check-integrity mypkg/1.0")
+    assert "Package signature verification: ok" in out
 
 
 def test_sigstore_should_sign_and_get_sign_keys():

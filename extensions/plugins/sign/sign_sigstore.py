@@ -30,6 +30,7 @@ try:
 except:
     from conans.model.recipe_ref import RecipeReference
     from conans.model.package_ref import PkgReference
+from conan.api.model.refs import PkgReference
 from conan.internal.util.files import sha256sum
 from conan.tools.files import save
 
@@ -126,16 +127,14 @@ def _run_command(command):
             result.returncode, result.args, output=result.stdout, stderr=result.stderr
         )
 
-    if result.stderr:
-        raise ConanException(f"Command produced stderr output:\n{result.stderr}")
 
-
-def sign(ref, artifacts_folder: str, signature_folder: str, **kwargs):
+def sign(ref, artifacts_folder: str, signature_folder: str, output):
     if _is_sign_disabled():
-        cli_out_write("Sign disabled")
+        output.highlight("Sign disabled")
         return
 
     _check_requirements()
+
     config = _load_config()
     ref_str = _format_reference(ref)
     if _should_sign(ref_str, "**", config):
@@ -143,8 +142,12 @@ def sign(ref, artifacts_folder: str, signature_folder: str, **kwargs):
     else:
         return
 
+    if os.environ.get("COSIGN_PASSWORD") is None:
+        raise ConanException(f"COSIGN_PASSWORD environment variable not set."
+                             f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
+
     # Sign & upload each artifact using X509
-    cli_out_write(f"Signing artifacts from {artifacts_folder} to {signature_folder}, "
+    output.info(f"Signing artifacts from {artifacts_folder} to {signature_folder}, "
                   f"using private key {privkey_filepath}")
 
     files = {}
@@ -159,21 +162,20 @@ def sign(ref, artifacts_folder: str, signature_folder: str, **kwargs):
     out_fpath = f"{sha_file}.sig"
 
     # Sign
-    # TODO: Sign with cosign -> cosign sign-blob --key <CONAN_SIGSTORE_PPRIVKEY (.pem)> <FILETOSIGN> > <SIGNATUREFILENAME (.sig)>
-    openssl_sign_cmd = [
-        "openssl.exe",
-        "dgst",
-        "-sha256",
-        "-sign", privkey_filepath,
-        "-out", out_fpath,
+    cosign_sign_cmd = [
+        "cosign",
+        "sign-blob",
+        "--key", privkey_filepath,
+        "--output-signature", out_fpath,
+        "-y",
         sha_file,
     ]
     try:
-        subprocess.check_call(openssl_sign_cmd, stdout=subprocess.DEVNULL, shell=True)
+        _run_command(cosign_sign_cmd)
     except Exception as exc:
         raise ConanException(f"Error signing artifact {sha_file}: {exc}")
 
-    cli_out_write(f"Created signature for file {sha_file} at {out_fpath}")
+    output.info(f"Created signature for file {sha_file} at {out_fpath}")
 
     # Upload to Rekor
     rekor_upload_cmd = [
@@ -185,16 +187,16 @@ def sign(ref, artifacts_folder: str, signature_folder: str, **kwargs):
         "--artifact", sha_file
     ]
     if _is_rekor_disabled():
-        cli_out_write(f"Rekor disabled. Skipping upload command: {' '.join(rekor_upload_cmd)}")
+        output.highlight(f"Rekor disabled. Skipping rekor upload command.")
     else:
         try:
             _run_command(rekor_upload_cmd)
         except Exception as exc:
             raise ConanException(f"Error uploading artifact sign {out_fpath}: {exc}")
-        cli_out_write(f"Uploaded signature {out_fpath} to Sigstore")
+        output.info(f"Uploaded signature {out_fpath} to Sigstore")
 
 
-def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
+def verify(ref, artifacts_folder, signature_folder, files, output):
     if _is_verify_disabled():
         cli_out_write("Verify disabled")
         return
@@ -207,36 +209,55 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
     else:
         return
 
+    is_package = isinstance(ref, PkgReference)
+    if is_package:
+        download_file_path = os.path.join(artifacts_folder, "conan_package.tgz")
+    else:
+        download_file_path = os.path.join(artifacts_folder, "conanfile.py")
+
     sha_file = os.path.join(signature_folder, "files-sha256.txt")
     sig_fpath = f"{sha_file}.sig"
 
-    if not os.path.exists(sha_file):
+    if not os.path.exists(download_file_path) and not os.path.exists(sig_fpath):
+        output.warning("Could not verify unsigned package.")
         return
-    if not os.path.exists(sig_fpath):
-        raise ConanException(f"Missing signature file at {sig_fpath}")
+
+    if not os.path.exists(sha_file) or not os.path.exists(sig_fpath):
+        raise ConanException("Missing signature files!")
 
     # Verify sha file
+    cosign_verify_cmd = [
+        "cosign",
+        "verify-blob",
+        "--key", pubkey_filepath,
+        "--signature", sig_fpath,
+        sha_file,
+    ]
+    try:
+        _run_command(cosign_verify_cmd)
+    except Exception as exc:
+        raise ConanException(f"Error signing artifact {sha_file}: {exc}")
 
     # TODO: Verify signature locally with openssl:
     # TODO: $ openssl dgst -sha256 -verify <CONAN_SIGSTORE_PUBKEY (.pem)> -signature <SIGNATUREFILENAME (.sig)> <FILETOSIGN>
     # TODO: Verify signature locally with cosign:
     # TODO: cosign verify-blob --key <CONAN_SIGSTORE_PUBKEY (.pem)> --signature <SIGNATUREFILENAME (.sig)> <FILETOSIGN>
 
-    # Verify against Rekor
-    rekor_verify_cmd = [
-        REKOR_CLI,
-        "verify",
-        "--pki-format", "x509",
-        "--signature", sig_fpath,
-        "--public-key", pubkey_filepath,
-        "--artifact", sha_file,
-    ]
     if _is_rekor_disabled():
-        cli_out_write(f"Rekor disabled. Skipping verify command: {' '.join(rekor_verify_cmd)}")
+        output.warning(f"Rekor disabled. Skipping rekor verify command.")
     else:
+        # Verify against Rekor
+        rekor_verify_cmd = [
+            REKOR_CLI,
+            "verify",
+            "--pki-format", "x509",
+            "--signature", sig_fpath,
+            "--public-key", pubkey_filepath,
+            "--artifact", sha_file,
+        ]
         try:
             _run_command(rekor_verify_cmd)
-            #subprocess.check_call(rekor_verify_cmd, stdout=subprocess.DEVNULL)
         except Exception as exc:
-            raise ConanException(f"{ref}: Error verifying signature for {sha_file}: {exc}")
-        cli_out_write(f"{ref}: Signature {sig_fpath} for {sha_file} verified against Sigstore!")
+            raise ConanException(f"Error verifying signature for {sha_file}: {exc}")
+        output.info(f"Signature {sig_fpath} for {sha_file} verified against Sigstore!")
+    output.info(f"Package signature verification: ok")
