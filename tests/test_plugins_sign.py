@@ -1,7 +1,6 @@
 import tempfile
 import textwrap
 import os
-import re
 
 import pytest
 
