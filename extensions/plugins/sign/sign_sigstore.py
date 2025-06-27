@@ -1,16 +1,19 @@
 """
-Plugin to sign/verify Conan packages with Sigstore's (https://www.sigstore.dev/) transparency log using the Rekor CLI
+Plugin to sign/verify Conan packages with Sigstore's (https://www.sigstore.dev/) cosign tool and
+record the signature into the Rekor transparency log for later verifications.
 
 Requirements: The following executables should be installed and in the PATH.
-    - openssl: https://openssl-library.org/source/
+    - cosign: https://github.com/sigstore/cosign/releases
     - rekor-cli: https://github.com/sigstore/rekor/releases
 
 To use this sigstore plugin, first generate a compatible keypair and define the environment variables for the keys:
 
-    $ openssl ecparam -genkey -name prime256v1 > ec_private.pem
-    $ openssl ec -in ec_private.pem -pubout > ec_public.pem
+    $ cosign generate-key-pair --output-key-prefix mykey
+
+This will generate a mykey.key private key and a mykey.pem public key.
 
 Environment variables:
+    - COSIGN_PASSWORD: Set the password of your private key. This is used when using the private key to sign packages.
     - CONAN_SIGSTORE_DISABLE_REKOR: Disable the rekor CLI calls, just sign/verify files with openssl.
     - CONAN_SIGSTORE_DISABLE_SIGN: Disable plugin's sign feature.
     - CONAN_SIGSTORE_DISABLE_VERIFY: Disable plugin's verify feature.
@@ -36,7 +39,7 @@ from conan.tools.files import save
 
 
 REKOR_CLI = "rekor-cli"
-OPENSSL = "openssl"
+COSIGN = "cosign"
 CONFIG_FILENAME = "sigstore_config.yaml"
 
 
@@ -61,7 +64,7 @@ def _load_config():
 def _format_reference(reference):
     try:
         return f"{reference.name}/{reference.version}@{reference.user}/{reference.channel}"
-    except:
+    except AttributeError:
         return f"{reference.ref.name}/{reference.ref.version}@{reference.ref.user}/{reference.ref.channel}"
 
 
@@ -104,7 +107,7 @@ def _get_verify_key(reference, remote, config):
 
 
 def _check_requirements():
-    for exe in [REKOR_CLI, OPENSSL]:
+    for exe in [REKOR_CLI, COSIGN]:
         if not which(exe):
             raise ConanException(f"Missing {exe} binary. {exe} is required to sign the artifacts. "
                                  f"Make sure it is installed in your system and available in the PATH")
@@ -112,6 +115,7 @@ def _check_requirements():
     if not os.path.exists(config_path):
         raise ConanException(f"Configuration file for the plugin not found at {config_path}. "
                              f"Please make sure it exists.")
+
 
 def _run_command(command):
     result = subprocess.run(
@@ -237,11 +241,6 @@ def verify(ref, artifacts_folder, signature_folder, files, output):
         _run_command(cosign_verify_cmd)
     except Exception as exc:
         raise ConanException(f"Error signing artifact {sha_file}: {exc}")
-
-    # TODO: Verify signature locally with openssl:
-    # TODO: $ openssl dgst -sha256 -verify <CONAN_SIGSTORE_PUBKEY (.pem)> -signature <SIGNATUREFILENAME (.sig)> <FILETOSIGN>
-    # TODO: Verify signature locally with cosign:
-    # TODO: cosign verify-blob --key <CONAN_SIGSTORE_PUBKEY (.pem)> --signature <SIGNATUREFILENAME (.sig)> <FILETOSIGN>
 
     if _is_rekor_disabled():
         output.warning(f"Rekor disabled. Skipping rekor verify command.")
