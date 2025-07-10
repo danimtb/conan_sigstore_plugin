@@ -14,7 +14,7 @@ def conan_test_package_signing():
     old_env = dict(os.environ)
     env_vars = {"CONAN_HOME": conan_home,
                 "CONAN_SIGSTORE_DISABLE_REKOR": "1",
-                "COSIGN_PASSWORD": "kkk"}
+                "COSIGN_PASSWORD": "fake-testing-pass"}
     os.environ.update(env_vars)
 
     # Prepare signing keys
@@ -27,24 +27,24 @@ def conan_test_package_signing():
     repo = os.path.join(os.path.dirname(__file__), "..")
     run(f"conan config install {repo}")
     base_path = os.path.join(conan_home, "extensions", "plugins", "sign")
-    old_path = os.path.join(base_path, "sign_sigstore.py")
-    new_path = os.path.join(base_path, "sign.py")
-    os.rename(old_path, new_path)
     config_path = os.path.join(base_path, "sigstore_config.yaml")
     save(config_path, textwrap.dedent(f"""
-            sign:
-              - remote: "**"
-                references: "**/**@**/**"
-                private_key: "{conan_sigstore_privkey}"
-                public_key: "{conan_sigstore_pubkey}"
+        sign:
+          references:
+            - "**/**@**/**"
+          provider: "conan"
+          private_key: "{conan_sigstore_privkey}"
+          public_key: "{conan_sigstore_pubkey}"
 
-            verify:
-              - remote: "**"
-                references: "**/**@**/**"
-                public_key: "{conan_sigstore_pubkey}"
-        """))
+        verify:
+          providers:
+            conan:
+              references:
+                - "**/**@**/**"
+              public_key: "{conan_sigstore_pubkey}"
+    """))
 
-    #Prepate test files
+    # Prepare test files
     current = tempfile.mkdtemp(suffix="conans")
     cwd = os.getcwd()
     os.chdir(current)
@@ -55,7 +55,7 @@ def conan_test_package_signing():
     try:
         yield
     finally:
-        #run("conan remove * -c")
+        run("conan remove * -c")
         os.chdir(cwd)
         os.environ.clear()
         os.environ.update(old_env)
@@ -63,10 +63,7 @@ def conan_test_package_signing():
 
 def test_sigstore_check_integrity(conan_test_package_signing):
     """
-    Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
-
-    Following env vars should be defined to run the test:
-        - CONAN_SIGSTORE_DISABLE_REKOR: Enable or disable rekor to test locally (disabled by default in the test for CI)
+    Test verifying package with conan cache check-integrity
     """
     out = run("conan cache check-integrity mypkg/1.0")
     # The package is still not signed
@@ -92,205 +89,137 @@ def test_sigstore_check_integrity(conan_test_package_signing):
 
 def test_sigstore(conan_test_package_signing):
     """
-    Test plugins/sign/sign_sigstore.py for Sigstore signing using Rekor
-
-    Following env vars should be defined to run the test:
-        - CONAN_SIGSTORE_DISABLE_REKOR: Enable or disable rekor to test locally (disabled by default in the test for CI)
+    Test the plugin's normal flow: upload (sign), install (verify)
     """
     out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run")
     assert "Signing artifacts" in out
 
-    # out = run("conan install --requires mypkg/1.0 -r=conancenter")
+    # FIXME: This should be a conan install from a remote
     out = run("conan cache check-integrity mypkg/1.0")
     assert "Package signature verification: ok" in out
 
 
 def test_sigstore_should_sign_and_get_sign_keys():
-    from extensions.plugins.sign.sign_sigstore import _should_sign, _get_sign_keys
+    from extensions.plugins.sign.sign import _should_sign, _get_sign_keys
 
+    # Test conan center reference
     config = {
-        "sign": [
-            {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ]
+        "sign": {
+            "references": ["**/**@**/**"],
+            "private_key": "keys/ec_private.pem",
+            "public_key": "keys/ec_public.pem"
+        }
     }
-    assert _should_sign("zlib/1.2.11@None/None", "conancenter", config)
-    assert "keys/ec_private.pem", "keys/ec_public.pem" == _get_sign_keys("zlib/1.2.11", "conancenter", config)
+    assert _should_sign("zlib/1.2.11@None/None", config)
+    assert "keys/ec_private.pem", "keys/ec_public.pem" == _get_sign_keys("zlib/1.2.11", config)
 
+    # Test exclude reference
     config = {
-        "sign": [
-            {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ]
+        "sign": {
+            "references": ["**/**@**/**"],
+            "exclude_references": ["**/**@**/**"],
+            "private_key": "keys/ec_private.pem",
+            "public_key": "keys/ec_public.pem"
+        }
     }
-    assert not _should_sign("zlib/1.2.11@None/None", "conan_server", config)
-    assert (None, None) == _get_sign_keys("zlib/1.2.11", "conan_server", config)
+    assert not _should_sign("zlib/1.2.11@None/None", config)
+    assert (None, None) == _get_sign_keys("zlib/1.2.11", config)
 
-    config = {
-        "sign": [
-            {
-                "remote": "**",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private1.pem",
-                "public_key": "keys/ec_public1.pem"
-            },
-            {
-                "remote": "conancenter",
-                "references": "zlib/**@**/**",
-                "private_key": "keys/ec_private2.pem",
-                "public_key": "keys/ec_public2.pem"
-            }
-        ]
-    }
-    assert _should_sign("zlib/1.2.11@None/None", "conancenter", config)
-    assert "keys/ec_private1.pem", "keys/ec_public1.pem" == _get_sign_keys("zlib/1.2.11", "conancenter", config)
 
-    assert not _should_sign("zlib/1.2.11@None/None", "my_company_remote", {
-        "sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@my_company/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ]
+    assert not _should_sign("zlib/1.2.11@None/None", {
+        "sign": {
+            "references": ["**/**@my_company/**"],
+        }
     })
-    assert _should_sign("zlib/1.2.11@my_company/None", "my_company_remote", {
-        "sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@my_company/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ]
+    assert _should_sign("zlib/1.2.11@my_company/None", {
+        "sign": {
+            "provider": "my_company",
+            "references": ["**/**@my_company/**"],
+        }
     })
-    assert not _should_sign("zlib/1.2.11@my_company/None", "my_company_remote", {
-        "sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ],
-        "exclude_sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "zlib/**@**/**"
-            }
-        ]
+    assert not _should_sign("zlib/1.2.11@my_company/None", {
+        "sign": {
+            "references": ["**/**@**/**"],
+            "exclude_references": ["zlib/**@**/**"]
+        }
     })
-    assert not _should_sign("zlib/1.2.11@None/None", "my_company_remote", {
-        "sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ],
-        "exclude_sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@None/None"
-            }
-        ]
+    assert not _should_sign("zlib/1.2.11@None/None", {
+        "sign": {
+            "references": ["**/**@**/**"],
+            "exclude_references": ["**/**@None/None"]
+        }
     })
-    assert _should_sign("zlib/1.2.11@my_company/None", "my_company_remote", {
-        "sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@**/**",
-                "private_key": "keys/ec_private.pem",
-                "public_key": "keys/ec_public.pem"
-            }
-        ],
-        "exclude_sign": [
-            {
-                "remote": "my_company_remote",
-                "references": "**/**@None/None"
-            }
-        ]
+    assert _should_sign("zlib/1.2.11@my_company/None", {
+        "sign": {
+            "references": ["**/**@**/**"],
+            "exclude_references": ["**/**@None/None"]
+        }
     })
 
 
 def test_sigstore_should_verify_and_get_verify_key():
-    from extensions.plugins.sign.sign_sigstore import _should_verify, _get_verify_key
+    from extensions.plugins.sign.sign import _should_verify, _get_verify_key
 
     config = {
-        "verify": [
+        "verify":
             {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "public_key": "keys/ec_public.pem"
+                "providers": {
+                    "conancenter": {
+                        "references": ["**/**@None/None"],
+                        "public_key": "keys/ec_public.pem"
+                    }
+                }
             }
-        ]
     }
     assert _should_verify("zlib/1.2.11@None/None", "conancenter", config)
     assert "keys/ec_public.pem" in _get_verify_key("zlib/1.2.11@None/None", "conancenter", config)
 
     config = {
-        "verify": [
-            {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "public_key": "keys/ec_public1.pem"
-            },
-            {
-                "remote": "conancenter",
-                "references": "zlib/**@**/**",
-                "public_key": "keys/ec_public2.pem"
+        "verify": {
+            "providers": {
+                "conancenter": {
+                    "references": ["**/**@None/None"],
+                    "exclude_references": ["**/**@**/**"],
+                    "public_key": "keys/ec_public1.pem"
+                }
             }
-        ]
-    }
-    assert _should_verify("zlib/1.2.11@None/None", "conancenter", config)
-    assert "keys/ec_public1.pem" in _get_verify_key("zlib/1.2.11@None/None", "conancenter", config)
-
-    config = {
-        "verify": [
-            {
-                "remote": "conancenter",
-                "references": "zlib/**@**/**",
-                "public_key": "keys/ec_public2.pem"
-            },
-            {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "public_key": "keys/ec_public1.pem"
-            }
-        ]
-    }
-    assert _should_verify("zlib/1.2.11@None/None", "conancenter", config)
-    assert "keys/ec_public2.pem" in _get_verify_key("zlib/1.2.11@None/None", "conancenter", config)
-
-    config = {
-        "verify": [
-            {
-                "remote": "conancenter",
-                "references": "**/**@**/**",
-                "public_key": "keys/ec_public1.pem"
-            },
-            {
-                "remote": "conancenter",
-                "references": "zlib/**@**/**",
-                "public_key": "keys/ec_public2.pem"
-            }
-        ],
-        "exclude_verify": [
-            {
-                "remote": "conancenter",
-                "references": "**/**@None/None",
-            }
-        ]
+        }
     }
     assert not _should_verify("zlib/1.2.11@None/None", "conancenter", config)
     assert _get_verify_key("zlib/1.2.11@None/None", "conancenter", config) is None
+
+    config = {
+        "verify": {
+            "providers": {
+                "conancenter": {
+                    "references": ["**/**@None/None"],
+                    "public_key": "keys/ec_public1.pem"
+                },
+                "mycompany": {
+                    "references": ["**/**@**/**"],
+                    "public_key": "keys/ec_public2.pem"
+                }
+            }
+        }
+    }
+    assert _should_verify("zlib/1.2.11@None/None", "mycompany", config)
+    assert "keys/ec_public2.pem" in _get_verify_key("zlib/1.2.11@None/None", "mycompany", config)
+
+    config = {
+        "verify": {
+            "providers": {
+                "conancenter": {
+                    "references": ["**/**@None/None"],
+                    "public_key": "keys/ec_public1.pem"
+                },
+                "mycompany": {
+                    "references": ["**/**@mycompany/None"],
+                    "public_key": "keys/ec_public2.pem"
+                }
+            }
+        }
+    }
+    assert not _should_verify("zlib/1.2.11@None/None", "mycompany", config)
+    assert _get_verify_key("zlib/1.2.11@None/None", "mycompany", config) is None
+    assert _should_verify("zlib/1.2.11@mycompany/None", "mycompany", config)
+    assert not _should_verify("zlib/1.2.11@mycompany/testing", "mycompany", config)

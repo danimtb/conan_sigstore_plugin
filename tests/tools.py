@@ -6,6 +6,7 @@ def run(cmd, error=False, *, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     process = subprocess.Popen(cmd, 
                                stdout=stdout,
                                stderr=stderr,
+                               stdin=subprocess.PIPE,
                                shell=True)
 
     out, err = process.communicate()
