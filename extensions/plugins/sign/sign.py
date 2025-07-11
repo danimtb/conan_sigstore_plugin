@@ -14,9 +14,9 @@ This will generate a mykey.key private key and a mykey.pem public key.
 
 Environment variables:
     - COSIGN_PASSWORD: Set the password of your private key. This is used when using the private key to sign packages.
-    - CONAN_SIGSTORE_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log  (disabled by default).
-    - CONAN_SIGSTORE_ENABLE_SIGN: Enable plugin's sign feature (enabled by default).
-    - CONAN_SIGSTORE_ENABLE_VERIFY: Enable plugin's verify feature (enabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log  (disabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_SIGN: Enable plugin's sign feature (enabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_VERIFY: Enable plugin's verify feature (enabled by default).
 """
 
 import fnmatch
@@ -38,6 +38,16 @@ COSIGN = "cosign"
 CONFIG_FILENAME = "sigstore_config.yaml"
 SUMMARY_FILENAME = "sign-summary.json"
 
+SIGNATURE_EXTENSIONS = {
+    # Declare the signature extension for other signing methods
+    "sigstore": "sig",
+    "gpg": "gpg",
+    "openssl-dgst": "sig",
+    "openssl-cms": "pem",
+    "minisign": "minisig",
+    "signify": "sig",
+}
+
 CONFIG_TEMPLATE_CONTENT = """
 # Use this section to declare the name of the provider that signs the artifacts,
 # the references that apply to be signed, and the path to the keys.
@@ -52,6 +62,7 @@ CONFIG_TEMPLATE_CONTENT = """
 #     - "**/**@None/None"
 #     - "**/**@other_company/**"
 #   provider: "MyCompany"               # (string) Name of the provider used to sign the packages.
+#   method: "sigstore"                  # (string) Name of the tool used to sign the packages.
 #   private_key: "{mycompany_privkey}"  # (path -relative to this config file-) Private key to sign the packages with.
 #   public_key: "{mycompany_pubkey}"    # (path -relative to this config file-) Public key to sign the packages with.
 
@@ -78,8 +89,13 @@ CONFIG_TEMPLATE_CONTENT = """
 """
 
 
+class NoActionRequired(Exception):
+    """Raised to indicate that no action is required and execution should return early."""
+    pass
+
+
 def _is_rekor_enabled(partial_config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_ENABLE_REKOR", False))
+    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_REKOR", False))
     if env_var:
         return True
     else:
@@ -87,7 +103,7 @@ def _is_rekor_enabled(partial_config):
 
 
 def _is_sign_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_ENABLE_SIGN", True))
+    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_SIGN", True))
     if not env_var:
         return False
     else:
@@ -95,7 +111,7 @@ def _is_sign_enabled(config):
 
 
 def _is_verify_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_ENABLE_VERIFY", True))
+    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_VERIFY", True))
     if not env_var:
         return False
     else:
@@ -110,37 +126,20 @@ def _load_config():
         save(None, config_path, CONFIG_TEMPLATE_CONTENT)
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
-    _check_config(config)
     return config
 
 
-def _check_config(config):
-    sign_config = config.get("sign")
-    if sign_config and sign_config.get("enabled", True):
-        provider = sign_config.get("provider")
-        assert provider is not None, "sign.provider should be defined to sign artifacts"
-        assert "*" not in provider, f"sign.provider does not allow patterns: {provider}"
-        assert sign_config.get("references")
-        assert sign_config.get("private_key")
-        assert sign_config.get("public_key")
-    verify_config = config.get("verify")
-    if verify_config and verify_config.get("enabled", True):
-        providers_config = verify_config.get("providers", {})
-        providers = [next(iter(provider)) for provider in providers_config if provider]
-        assert len(providers) == len(set(providers))
-        for _, provider_data in providers_config.items():
-            assert provider_data.get("references")
-            assert provider_data.get("public_key")
-
-
 def _format_reference(reference):
-    try:
-        return f"{reference.name}/{reference.version}@{reference.user}/{reference.channel}"
-    except AttributeError:
-        return f"{reference.ref.name}/{reference.ref.version}@{reference.ref.user}/{reference.ref.channel}"
+    if isinstance(reference, PkgReference):
+        reference = reference.ref
+    ref_str = str(reference)
+    if reference.user is None:
+        ref_str = f"{ref_str}@"
+    return ref_str
 
 
-def _should_sign(reference, config):
+def _should_sign(ref, config):
+    reference = _format_reference(ref)
     sign_config = config.get("sign", [])
     if sign_config:
         for rule in sign_config.get("exclude_references", []):
@@ -152,24 +151,24 @@ def _should_sign(reference, config):
     return False
 
 
-def _get_sign_keys(reference, config):
-    if _should_sign(reference, config):
+def _get_sign_keys(ref, config):
+    if _should_sign(ref, config):
         sign_config = config.get("sign", {})
         return sign_config.get("private_key"), sign_config.get("public_key")
     return None, None
 
 
-def _should_verify(reference, provider, config):
-    print(config)
+def _should_verify(ref, provider, config):
+    ref_str = _format_reference(ref)
     verify_config = config.get("verify")
     if verify_config:
         provider_config = verify_config.get("providers", {}).get(provider)
         if provider_config:
             for rule in provider_config.get("exclude_references", []):
-                if fnmatch.fnmatch(reference, rule):
+                if fnmatch.fnmatch(ref_str, rule):
                     return False
             for rule in provider_config.get("references", []):
-                if fnmatch.fnmatch(reference, rule):
+                if fnmatch.fnmatch(ref_str, rule):
                     return True
     return False
 
@@ -203,26 +202,14 @@ def _run_command(command):
         )
 
 
-def sign(ref, artifacts_folder: str, signature_folder: str, output):
+def _sign_common_checks(ref, artifacts_folder, signature_folder, output):
     config = _load_config()
     if not _is_sign_enabled(config):
         output.highlight("Sign disabled")
-        return
+        raise NoActionRequired()
 
-    _check_exe_requirements([COSIGN])
-    ref_str = _format_reference(ref)
-    if _should_sign(ref_str, config):
-        privkey_filepath, pubkey_filepath = _get_sign_keys(ref_str, config)
-    else:
-        return
-
-    if os.environ.get("COSIGN_PASSWORD") is None:
-        raise ConanException(f"COSIGN_PASSWORD environment variable not set."
-                             f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
-
-    # Sign & upload each artifact using X509
-    output.info(f"Signing artifacts from {artifacts_folder} to {signature_folder}, "
-                f"using private key {privkey_filepath}")
+    if not _should_sign(ref, config):
+        raise NoActionRequired()
 
     files = {}
     for fname in os.listdir(artifacts_folder):
@@ -231,112 +218,161 @@ def sign(ref, artifacts_folder: str, signature_folder: str, output):
             sha256 = sha256sum(file_path)
             files[fname] = sha256
     sorted_files = dict(sorted(files.items()))
-    summary_file = os.path.join(signature_folder, SUMMARY_FILENAME)
+    summary_filepath = os.path.join(signature_folder, SUMMARY_FILENAME)
+    provider = config.get("sign").get("provider")
+    assert provider is not None
+    method = config.get("sign").get("method")
+    assert method is not None
     content = {
-        "provider": config.get("sign").get("provider"),
+        "provider": provider,
+        "method": method,
         "files": sorted_files
     }
-    save(None, summary_file, json.dumps(content))
-    signature_file = f"{summary_file}.sig"
+    save(None, summary_filepath, json.dumps(content))
+    signature_extension = SIGNATURE_EXTENSIONS.get(method)
+    assert signature_extension is not None and "." not in signature_extension
+    signature_filepath = f"{summary_filepath}.{signature_extension}"
+    return config, summary_filepath, signature_filepath, provider, method
 
-    # Sign
-    cosign_sign_cmd = [
-        "cosign",
-        "sign-blob",
-        "--key", privkey_filepath,
-        "--output-signature", signature_file,
-        "-y",
-        summary_file,
-    ]
+
+def sign(ref, artifacts_folder: str, signature_folder: str, output):
     try:
-        _run_command(cosign_sign_cmd)
-    except Exception as exc:
-        raise ConanException(f"Error signing artifact {summary_file}: {exc}")
+        config, summary_filepath, signature_filepath, provider, method = \
+            _sign_common_checks(ref, artifacts_folder, signature_folder, output)
+    except NoActionRequired:
+        return
 
-    output.info(f"Created signature for file {summary_file} at {signature_file}")
+    if method == "sigstore":
+        _check_exe_requirements([COSIGN])
+        privkey_filepath, pubkey_filepath = _get_sign_keys(ref, config)
 
-    if not _is_rekor_enabled(config.get("verify")):
-        output.highlight(f"Rekor disabled. Skipping rekor upload command.")
-    else:
-        _check_exe_requirements([REKOR_CLI])
-        # Upload to Rekor
-        rekor_upload_cmd = [
-            REKOR_CLI,
-            "upload",
-            "--pki-format", "x509",
-            "--signature", signature_file,
-            "--public-key", pubkey_filepath,
-            "--artifact", summary_file
+        if os.environ.get("COSIGN_PASSWORD") is None:
+            raise ConanException(f"COSIGN_PASSWORD environment variable not set."
+                                 f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
+
+        output.info(f"Signing artifacts from {artifacts_folder} to {signature_folder}, "
+                    f"using private key {privkey_filepath}")
+
+        cosign_sign_cmd = [
+            "cosign",
+            "sign-blob",
+            "--key", privkey_filepath,
+            "--output-signature", signature_filepath,
+            "-y",
+            summary_filepath,
         ]
         try:
-            _run_command(rekor_upload_cmd)
+            _run_command(cosign_sign_cmd)
         except Exception as exc:
-            raise ConanException(f"Error uploading artifact sign {signature_file}: {exc}")
-        output.info(f"Uploaded signature {signature_file} to Rekor")
+            raise ConanException(f"Error signing artifact {summary_filepath}: {exc}")
+
+        output.info(f"Created signature for file {summary_filepath} at {signature_filepath}")
+
+        if not _is_rekor_enabled(config.get("sign")):
+            output.highlight(f"Rekor disabled. Skipping rekor upload command.")
+        else:
+            _check_exe_requirements([REKOR_CLI])
+            # Upload to Rekor
+            rekor_upload_cmd = [
+                REKOR_CLI,
+                "upload",
+                "--pki-format", "x509",
+                "--signature", signature_filepath,
+                "--public-key", pubkey_filepath,
+                "--artifact", summary_filepath
+            ]
+            try:
+                _run_command(rekor_upload_cmd)
+            except Exception as exc:
+                raise ConanException(f"Error uploading artifact sign {signature_filepath}: {exc}")
+            output.info(f"Uploaded signature {signature_filepath} to Rekor")
+    else:
+        raise ConanException(f"Signature method {method} not supported!")
 
 
-def verify(ref, artifacts_folder, signature_folder, files, output):
+def _verify_common_checks(ref, artifacts_folder, signature_folder, files, output):
+    # This function serves as common checks and tasks that are independent to any signing method.
+    # Returns: config, summary_filepath, signature_filepath, provider, method
+
     config = _load_config()
     if not _is_verify_enabled(config):
         output.highlight("Verify disabled")
-        return
-
-    _check_exe_requirements([COSIGN])
-    ref_str = _format_reference(ref)
+        raise NoActionRequired()
 
     is_package = isinstance(ref, PkgReference)
     if is_package:
-        download_file_path = os.path.join(artifacts_folder, "conan_package.tgz")
+        download_filepath = os.path.join(artifacts_folder, "conan_package.tgz")
     else:
-        download_file_path = os.path.join(artifacts_folder, "conanfile.py")
+        download_filepath = os.path.join(artifacts_folder, "conanfile.py")
 
-    summary_file = os.path.join(signature_folder, SUMMARY_FILENAME)
-    signature_file = f"{summary_file}.sig"
+    summary_filepath = os.path.join(signature_folder, SUMMARY_FILENAME)
 
-    if not os.path.exists(download_file_path) and not os.path.exists(signature_file):
+    if not os.path.exists(download_filepath) and not os.path.exists(summary_filepath):
         output.warning("Could not verify unsigned package.")
-        return
+        raise NoActionRequired()
 
-    with open(summary_file, "r") as file:
-        provider = json.load(file)["provider"]
+    with open(summary_filepath, "r") as file:
+        summary_json = json.load(file)
+        provider = summary_json.get("provider")
+        method = summary_json.get("method")
 
-    if _should_verify(ref_str, provider, config):
-        pubkey_filepath = _get_verify_key(ref_str, provider, config)
-    else:
-        return
+    if not _should_verify(ref, provider, config):
+        raise NoActionRequired()
 
-    if not os.path.exists(summary_file) or not os.path.exists(signature_file):
+    # TODO: Verify files listed in summary file correspond to the info in the <files> argument
+
+    signature_extension = SIGNATURE_EXTENSIONS.get(method)
+    assert signature_extension is not None and "." not in signature_extension
+    signature_filepath = f"{summary_filepath}.{signature_extension}"
+
+    if not os.path.exists(summary_filepath) or not os.path.exists(signature_filepath):
         raise ConanException("Missing signature files!")
+    return config, summary_filepath, signature_filepath, provider, method
 
-    # Verify sha file
-    cosign_verify_cmd = [
-        "cosign",
-        "verify-blob",
-        "--key", pubkey_filepath,
-        "--signature", signature_file,
-        summary_file,
-    ]
+
+def verify(ref, artifacts_folder, signature_folder, files, output):
     try:
-        _run_command(cosign_verify_cmd)
-    except Exception as exc:
-        raise ConanException(f"Error signing artifact {summary_file}: {exc}")
+        config, summary_filepath, signature_filepath, provider, method = \
+            _verify_common_checks(ref, artifacts_folder, signature_folder, files, output)
+    except NoActionRequired:
+        return
 
-    if not _is_rekor_enabled(config.get("verify", {}).get("providers", {}).get(provider, {})):
-        output.warning(f"Rekor disabled. Skipping rekor verify command.")
-    else:
-        _check_exe_requirements([REKOR_CLI])
-        # Verify against Rekor
-        rekor_verify_cmd = [
-            REKOR_CLI,
-            "verify",
-            "--pki-format", "x509",
-            "--signature", signature_file,
-            "--public-key", pubkey_filepath,
-            "--artifact", summary_file,
+    # Support different implementations to verify the packages
+    if method == "sigstore":
+        _check_exe_requirements([COSIGN])
+        pubkey_filepath = _get_verify_key(ref, provider, config)
+
+        # Verify sha file
+        cosign_verify_cmd = [
+            "cosign",
+            "verify-blob",
+            "--key", pubkey_filepath,
+            "--signature", signature_filepath,
+            summary_filepath,
         ]
         try:
-            _run_command(rekor_verify_cmd)
+            _run_command(cosign_verify_cmd)
         except Exception as exc:
-            raise ConanException(f"Error verifying signature for {summary_file}: {exc}")
-        output.info(f"Signature {signature_file} for {summary_file} verified against Rekor!")
+            raise ConanException(f"Error signing artifact {summary_filepath}: {exc}")
+
+        if not _is_rekor_enabled(config.get("verify", {}).get("providers", {}).get(provider, {})):
+            output.warning(f"Rekor disabled. Skipping rekor verify command.")
+        else:
+            _check_exe_requirements([REKOR_CLI])
+            # Verify against Rekor
+            rekor_verify_cmd = [
+                REKOR_CLI,
+                "verify",
+                "--pki-format", "x509",
+                "--signature", signature_filepath,
+                "--public-key", pubkey_filepath,
+                "--artifact", summary_filepath,
+            ]
+            try:
+                _run_command(rekor_verify_cmd)
+            except Exception as exc:
+                raise ConanException(f"Error verifying signature for {summary_filepath}: {exc}")
+            output.info(f"Signature {signature_filepath} for {summary_filepath} verified against Rekor!")
+    else:
+        raise ConanException(f"Signature method {method} not supported!")
     output.info(f"Package signature verification: ok")

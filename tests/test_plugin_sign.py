@@ -5,6 +5,7 @@ import os
 import pytest
 
 from tools import run, save
+from conan.api.model.refs import RecipeReference
 
 
 @pytest.fixture
@@ -31,8 +32,9 @@ def conan_test_package_signing():
     save(config_path, textwrap.dedent(f"""
         sign:
           references:
-            - "**/**@**/**"
+            - "**/**@"
           provider: "conan"
+          method: "sigstore"
           private_key: "{conan_sigstore_privkey}"
           public_key: "{conan_sigstore_pubkey}"
 
@@ -40,7 +42,7 @@ def conan_test_package_signing():
           providers:
             conan:
               references:
-                - "**/**@**/**"
+                - "**/**@"
               public_key: "{conan_sigstore_pubkey}"
     """))
 
@@ -105,54 +107,53 @@ def test_sigstore_should_sign_and_get_sign_keys():
     # Test conan center reference
     config = {
         "sign": {
-            "references": ["**/**@**/**"],
+            "references": ["**/**"],
             "private_key": "keys/ec_private.pem",
             "public_key": "keys/ec_public.pem"
         }
     }
-    assert _should_sign("zlib/1.2.11@None/None", config)
+    assert _should_sign(RecipeReference("zlib", "1.2.11"), config)
     assert "keys/ec_private.pem", "keys/ec_public.pem" == _get_sign_keys("zlib/1.2.11", config)
 
     # Test exclude reference
     config = {
         "sign": {
             "references": ["**/**@**/**"],
-            "exclude_references": ["**/**@**/**"],
+            "exclude_references": ["**/**@"],
             "private_key": "keys/ec_private.pem",
             "public_key": "keys/ec_public.pem"
         }
     }
-    assert not _should_sign("zlib/1.2.11@None/None", config)
-    assert (None, None) == _get_sign_keys("zlib/1.2.11", config)
+    assert not _should_sign(RecipeReference("zlib", "1.2.11"), config)
+    assert (None, None) == _get_sign_keys(RecipeReference("zlib", "1.2.11"), config)
 
 
-    assert not _should_sign("zlib/1.2.11@None/None", {
+    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
         "sign": {
             "references": ["**/**@my_company/**"],
         }
     })
-    assert _should_sign("zlib/1.2.11@my_company/None", {
+    assert _should_sign(RecipeReference("zlib", "1.2.11", "my_company"), {
         "sign": {
-            "provider": "my_company",
-            "references": ["**/**@my_company/**"],
+            "references": ["**/**@my_company"],
         }
     })
-    assert not _should_sign("zlib/1.2.11@my_company/None", {
+    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
         "sign": {
             "references": ["**/**@**/**"],
             "exclude_references": ["zlib/**@**/**"]
         }
     })
-    assert not _should_sign("zlib/1.2.11@None/None", {
+    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
         "sign": {
             "references": ["**/**@**/**"],
             "exclude_references": ["**/**@None/None"]
         }
     })
-    assert _should_sign("zlib/1.2.11@my_company/None", {
+    assert _should_sign(RecipeReference("zlib", "1.2.11", "my_company"), {
         "sign": {
-            "references": ["**/**@**/**"],
-            "exclude_references": ["**/**@None/None"]
+            "references": ["**/**@**"],
+            "exclude_references": ["**/**@"]
         }
     })
 
@@ -165,14 +166,14 @@ def test_sigstore_should_verify_and_get_verify_key():
             {
                 "providers": {
                     "conancenter": {
-                        "references": ["**/**@None/None"],
+                        "references": ["**/**@"],
                         "public_key": "keys/ec_public.pem"
                     }
                 }
             }
     }
-    assert _should_verify("zlib/1.2.11@None/None", "conancenter", config)
-    assert "keys/ec_public.pem" in _get_verify_key("zlib/1.2.11@None/None", "conancenter", config)
+    assert _should_verify(RecipeReference("zlib", "1.2.11"), "conancenter", config)
+    assert "keys/ec_public.pem" in _get_verify_key(RecipeReference("zlib", "1.2.11"), "conancenter", config)
 
     config = {
         "verify": {
@@ -185,8 +186,25 @@ def test_sigstore_should_verify_and_get_verify_key():
             }
         }
     }
-    assert not _should_verify("zlib/1.2.11@None/None", "conancenter", config)
-    assert _get_verify_key("zlib/1.2.11@None/None", "conancenter", config) is None
+    assert not _should_verify(RecipeReference("zlib", "1.2.11"), "conancenter", config)
+    assert _get_verify_key(RecipeReference("zlib", "1.2.11"), "conancenter", config) is None
+
+    config = {
+        "verify": {
+            "providers": {
+                "conancenter": {
+                    "references": ["**/**@"],
+                    "public_key": "keys/ec_public1.pem"
+                },
+                "mycompany": {
+                    "references": ["**/**@"],
+                    "public_key": "keys/ec_public2.pem"
+                }
+            }
+        }
+    }
+    assert _should_verify(RecipeReference("zlib", "1.2.11"), "mycompany", config)
+    assert "keys/ec_public2.pem" in _get_verify_key(RecipeReference("zlib", "1.2.11"), "mycompany", config)
 
     config = {
         "verify": {
@@ -196,30 +214,13 @@ def test_sigstore_should_verify_and_get_verify_key():
                     "public_key": "keys/ec_public1.pem"
                 },
                 "mycompany": {
-                    "references": ["**/**@**/**"],
+                    "references": ["**/**@mycompany"],
                     "public_key": "keys/ec_public2.pem"
                 }
             }
         }
     }
-    assert _should_verify("zlib/1.2.11@None/None", "mycompany", config)
-    assert "keys/ec_public2.pem" in _get_verify_key("zlib/1.2.11@None/None", "mycompany", config)
-
-    config = {
-        "verify": {
-            "providers": {
-                "conancenter": {
-                    "references": ["**/**@None/None"],
-                    "public_key": "keys/ec_public1.pem"
-                },
-                "mycompany": {
-                    "references": ["**/**@mycompany/None"],
-                    "public_key": "keys/ec_public2.pem"
-                }
-            }
-        }
-    }
-    assert not _should_verify("zlib/1.2.11@None/None", "mycompany", config)
-    assert _get_verify_key("zlib/1.2.11@None/None", "mycompany", config) is None
-    assert _should_verify("zlib/1.2.11@mycompany/None", "mycompany", config)
-    assert not _should_verify("zlib/1.2.11@mycompany/testing", "mycompany", config)
+    assert not _should_verify(RecipeReference("zlib", "1.2.11"), "mycompany", config)
+    assert _get_verify_key(RecipeReference("zlib", "1.2.11"), "mycompany", config) is None
+    assert _should_verify(RecipeReference("zlib", "1.2.11", "mycompany"), "mycompany", config)
+    assert not _should_verify(RecipeReference("zlib", "1.2.11", "mycompany", "testing"), "mycompany", config)

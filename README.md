@@ -24,7 +24,7 @@ Read more about it in the documentation: https://docs.conan.io/2/reference/exten
 
 When the packages are prepared for the upload (`conan upload`), the packages are signed following this process:
   1. It creates a `sign-summary.json` summary file with the provider that signs the packages, the files in the package
-     andtheir hashes. It is stored in the metadata/sign folder. 
+     and their hashes. It is stored in the metadata/sign folder.
   2. It creates a `sign-summary.json.sig` signature file using `cosign`. It is stored in the metadata/signature folder.
   3. The files at metadata/sign folder are then uploaded alongside the package artifacts.
   4. If rekor is enabled, the signature of the package is registered against the rekor public log.
@@ -69,12 +69,35 @@ This will generate a ``mykey.key`` private key and a ``mykey.pub`` public key.
 Note that you may be prompted to introduce a password for your keypair that will be required in the sign process.
 The password should be set as ``COSIGN_PASSWORD`` environment variable for the plugin to signing the packages.
 
+## Signature summary file structure
+
+The format of the `sign-summary.json` file is the following:
+
+```json
+{
+  "provider": "<name of the agent signing the package>",
+  "method": "sigstore",
+  "files": {
+    "<file1>": "<sha-file1>",
+    "<file2>": "<sha-file2>"
+  }
+}
+```
+Description of the contents:
+
+- **provider**: Name of the angent that is signing the package. This is also used in the verification process to choose the
+  right keys to verify.
+- **method**: Method use to sign the packages. This is useful to indicate different signing formats
+  (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
+  plugin. Currently the only method implemented is `cosing`.
+- **files**: This is a sorted dictionary with filenames and their respective `sha256` checksum of all the package files.
+
 ## Environment Variables
 
 - ``COSIGN_PASSWORD``: Set the password of your private key. This is used when using the private key to sign packages.
-- ``CONAN_SIGSTORE_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
-- ``CONAN_SIGSTORE_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
-- ``CONAN_SIGSTORE_ENABLE_REKOR``: Enable sign and verify using the Rekor CLI and rekor log  (disabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable sign and verify using the Rekor CLI and rekor log  (disabled by default).
 
 ## Configuration
 
@@ -97,6 +120,7 @@ sign:
     - "**/**@None/None"
     - "**/**@other_company/**"
   provider: "mycompany"                         # (string) Name of the provider used to sign the packages.
+  method: "sigstore"                            # (string) Name of the tool used to sign the packages.
   private_key: "path/to/mycompany-private.key"  # (path -relative to this config file-) Private key to sign the packages with.
   public_key: "path/to/mycompany-public.pub"    # (path -relative to this config file-) Public key to sign the packages with.
 
