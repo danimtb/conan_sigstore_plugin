@@ -117,7 +117,7 @@ sign:
     - "**/**@**/**"
     - "mylib/1.0.0"
   exclude_references:                           # (list) References or pattern of references that should NOT be signed.
-    - "**/**@None/None"
+    - "**/**@"
     - "**/**@other_company/**"
   provider: "mycompany"                         # (string) Name of the provider used to sign the packages.
   method: "sigstore"                            # (string) Name of the tool used to sign the packages.
@@ -130,9 +130,9 @@ verify:
   providers:                                        # (list) Providers that sign the packages for verification.
     conancenter:
       references:                                   # (list) References or pattern that should be verified.
-        - "**/**@None/None"
+        - "**/**@"
       exclude_references:                           # (list) References or pattern that should NOT be verified.
-        - "zlib/1.2.11@None/None"
+        - "zlib/1.2.11@"
       public_key: "path/to/conancenter-public.pub"  # (path relative to this file) Public key to verify the packages with.
       use_rekor: false                              # (bool) Enable verifying the signature against the public Rekor transparency log.
     mycompany:

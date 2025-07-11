@@ -59,8 +59,8 @@ CONFIG_TEMPLATE_CONTENT = """
 #     - "**/**@**/**"
 #     - "mylib/1.0.0"
 #   exclude_references:                 # (list) References or pattern of references that should NOT be signed.
-#     - "**/**@None/None"
-#     - "**/**@other_company/**"
+#     - "**/**@"
+#     - "**/**@other_company"
 #   provider: "MyCompany"               # (string) Name of the provider used to sign the packages.
 #   method: "sigstore"                  # (string) Name of the tool used to sign the packages.
 #   private_key: "{mycompany_privkey}"  # (path -relative to this config file-) Private key to sign the packages with.
@@ -74,9 +74,9 @@ CONFIG_TEMPLATE_CONTENT = """
 #   providers:                                        # (list) Providers that sign the packages for verification.
 #     conancenter:
 #       references:                                   # (list) References or pattern that should be verified.
-#         - "**/**@None/None"
+#         - "**/**@"
 #       exclude_references:                           # (list) References or pattern that should NOT be verified.
-#         - "zlib/1.2.11@None/None"
+#         - "zlib/1.2.11@"
 #       public_key: "path/to/conancenter-public.pem"  # (path relative to this file) Public key to verify the packages with.
 #       use_rekor: false                              # (bool) Enable verifying the signature against the Rekor log.
 #     mycompany:

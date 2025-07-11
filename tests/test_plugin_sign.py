@@ -147,7 +147,7 @@ def test_sigstore_should_sign_and_get_sign_keys():
     assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
         "sign": {
             "references": ["**/**@**/**"],
-            "exclude_references": ["**/**@None/None"]
+            "exclude_references": ["**/**@"]
         }
     })
     assert _should_sign(RecipeReference("zlib", "1.2.11", "my_company"), {
@@ -179,8 +179,8 @@ def test_sigstore_should_verify_and_get_verify_key():
         "verify": {
             "providers": {
                 "conancenter": {
-                    "references": ["**/**@None/None"],
-                    "exclude_references": ["**/**@**/**"],
+                    "references": ["**/**@"],
+                    "exclude_references": ["**/**@"],
                     "public_key": "keys/ec_public1.pem"
                 }
             }
@@ -210,7 +210,7 @@ def test_sigstore_should_verify_and_get_verify_key():
         "verify": {
             "providers": {
                 "conancenter": {
-                    "references": ["**/**@None/None"],
+                    "references": ["**/**@"],
                     "public_key": "keys/ec_public1.pem"
                 },
                 "mycompany": {
