@@ -89,7 +89,7 @@ Description of the contents:
   right keys to verify.
 - **method**: Method use to sign the packages. This is useful to indicate different signing formats
   (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
-  plugin. Currently the only method implemented is `cosing`.
+  plugin. Currently the only method implemented is `sigstore` (using `cosing` and `rekor` tools).
 - **files**: This is a sorted dictionary with filenames and their respective `sha256` checksum of all the package files.
 
 ## Environment Variables
