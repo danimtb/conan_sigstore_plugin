@@ -23,15 +23,15 @@ And the latest changes introduced at: https://github.com/conan-io/conan/pull/187
 
 ## How does the plugin work?
 
-When the packages are prepared for the upload (`conan upload`), the packages are signed following this process:
-  1. It creates a `sign-summary.json` summary file with the provider that signs the packages, the files in the package
-     and their hashes. It is stored in the metadata/sign folder.
+When the packages are prepared for the upload (`conan upload`) or signed with `conan cache sign`, the packages are
+signed following this process:
+  1. It saves the sign provider and method into the `sign-summary.json` file using the content of the `sign_tools`.
   2. It creates a `sign-summary.json.sig` signature file using `cosign`. It is stored in the metadata/signature folder.
   3. The files at metadata/sign folder are then uploaded alongside the package artifacts.
   4. If rekor is enabled, the signature of the package is registered against the rekor public log.
 
-When the packages are installed (`conan install`) or when they are integrity-checked in the cache
-(`conan cache check-integrity`), the packages are verified following this process:
+When the packages are installed (`conan install`) or when they are verified with `conan cache verify`, the packages are
+verified following this process:
 
   1. The `sign-summary.json.sig` is verified using `cosign` against the public key provided.
   2. If rekor is enabled, the signature of the package is also verified against the rekor public log.
@@ -86,11 +86,11 @@ The format of the `sign-summary.json` file is the following:
 ```
 Description of the contents:
 
-- **provider**: Name of the angent that is signing the package. This is also used in the verification process to choose the
-  right keys to verify.
+- **provider**: Name of the angent that is signing the package. This is also used in the verification process to choose
+  the right keys to verify.
 - **method**: Method use to sign the packages. This is useful to indicate different signing formats
   (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
-  plugin. Currently the only method implemented is `sigstore` (using `cosing` and `rekor` tools).
+  plugin. Currently, the only method implemented is `sigstore` (using `cosing` and `rekor` tools).
 - **files**: This is a sorted dictionary with filenames and their respective `sha256` checksum of all the package files.
 
 ## Environment Variables
