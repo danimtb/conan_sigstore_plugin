@@ -9,6 +9,7 @@ packages, in this case, leveraging the tools provided by Sigstore such as Cosign
 
 This plugin is implemented following the **package signing plugin interface**.
 Read more about it in the documentation: https://docs.conan.io/2/reference/extensions/package_signing.html
+And the latest changes introduced at: https://github.com/conan-io/conan/pull/18785
 
 ### Sigstore tools used by the plugin
 

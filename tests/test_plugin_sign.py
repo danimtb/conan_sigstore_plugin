@@ -63,27 +63,28 @@ def conan_test_package_signing():
         os.environ.update(old_env)
 
 
-def test_sigstore_check_integrity(conan_test_package_signing):
+def test_cache_sign_verify(conan_test_package_signing):
     """
-    Test verifying package with conan cache check-integrity
+    Test verifying package with conan cache commands
     """
-    out = run("conan cache check-integrity mypkg/1.0")
+    out = run("conan cache verify mypkg/1.0")
     # The package is still not signed
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: WARN: Could not verify unsigned package" in out
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
            "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
 
-    out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run --force")
+    out = run("conan cache sign mypkg/1.0")
     assert "Signing artifacts" in out
-    # The package is now signed after the upload
-    out = run("conan cache check-integrity mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Package signature verification: ok" in out
+    # TODO: assert
+    # The package is now signed
+    out = run("conan cache verify mypkg/1.0")
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Signature correctly verified with cosign" in out
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e: Package signature verification: ok" in out
+           "#4a12a155a57785a80d517f75dafee98e: Signature correctly verified with cosign" in out
 
     run("conan install --requires mypkg/1.0 --build mypkg/1.0")
-    out = run("conan cache check-integrity mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Package signature verification: ok" in out
+    out = run("conan cache verify mypkg/1.0")
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Signature correctly verified with cosign" in out
     # New built package revision has not been signed
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
            "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
@@ -97,8 +98,8 @@ def test_sigstore(conan_test_package_signing):
     assert "Signing artifacts" in out
 
     # FIXME: This should be a conan install from a remote
-    out = run("conan cache check-integrity mypkg/1.0")
-    assert "Package signature verification: ok" in out
+    out = run("conan cache verify mypkg/1.0")
+    assert "Signature correctly verified with cosign" in out
 
 
 def test_sigstore_should_sign_and_get_sign_keys():

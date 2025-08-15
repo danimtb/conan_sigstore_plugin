@@ -126,6 +126,9 @@ def _load_config():
         save(None, config_path, CONFIG_TEMPLATE_CONTENT)
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
+    if config.get("sign"):
+        assert config.get("sign").get("provider") is not None
+        assert config.get("sign").get("method") is not None
     return config
 
 
@@ -202,7 +205,7 @@ def _run_command(command):
         )
 
 
-def _sign_common_checks(ref, artifacts_folder, signature_folder, output):
+def _sign_common_checks(ref, output, sign_tools):
     config = _load_config()
     if not _is_sign_enabled(config):
         output.highlight("Sign disabled")
@@ -211,37 +214,41 @@ def _sign_common_checks(ref, artifacts_folder, signature_folder, output):
     if not _should_sign(ref, config):
         raise NoActionRequired()
 
-    files = {}
-    for fname in os.listdir(artifacts_folder):
-        file_path = os.path.join(artifacts_folder, fname)
-        if os.path.isfile(file_path):
-            sha256 = sha256sum(file_path)
-            files[fname] = sha256
-    sorted_files = dict(sorted(files.items()))
-    summary_filepath = os.path.join(signature_folder, SUMMARY_FILENAME)
     provider = config.get("sign").get("provider")
-    assert provider is not None
     method = config.get("sign").get("method")
-    assert method is not None
-    content = {
-        "provider": provider,
-        "method": method,
-        "files": sorted_files
-    }
-    save(None, summary_filepath, json.dumps(content))
+
+    summary_filepath = sign_tools.get_summary_file_path()
     signature_extension = SIGNATURE_EXTENSIONS.get(method)
     assert signature_extension is not None and "." not in signature_extension
     signature_filepath = f"{summary_filepath}.{signature_extension}"
-    return config, summary_filepath, signature_filepath, provider, method
+
+    if sign_tools.is_pkg_signed():
+        # Package is already signed: Check provider and method match
+        summary_json = sign_tools.load_summary()
+        summary_provider = summary_json.get("provider")
+        summary_method = summary_json.get("method")
+        output.info(f"Package already signed (provider: {summary_provider}, method: {summary_method})\n"
+                    f"\tSignature file: {signature_filepath}")
+        assert summary_provider == provider,\
+            f"Sign provider does not match (config: {provider} != summary: {summary_provider})"
+        assert summary_method == method, f"Sign method does not match (config: {method} != summary: {summary_method})"
+    else:
+        summary = sign_tools.create_summary_content()
+        summary["provider"] = provider
+        summary["method"] = method
+        sign_tools.save_summary(summary)
+        return config, signature_filepath, provider, method
 
 
-def sign(ref, artifacts_folder: str, signature_folder: str, output):
+def sign(ref, artifacts_folder, signature_folder, output, sign_tools, **kwargs):
     try:
-        config, summary_filepath, signature_filepath, provider, method = \
-            _sign_common_checks(ref, artifacts_folder, signature_folder, output)
+        config, signature_filepath, provider, method = _sign_common_checks(ref, output, sign_tools)
     except NoActionRequired:
         return
 
+    summary_filepath = sign_tools.get_summary_file_path()
+
+    # Support different signing implementations (sigstore, openssl, gpg...) to sign the packages
     if method == "sigstore":
         _check_exe_requirements([COSIGN])
         privkey_filepath, pubkey_filepath = _get_sign_keys(ref, config)
@@ -288,9 +295,10 @@ def sign(ref, artifacts_folder: str, signature_folder: str, output):
             output.info(f"Uploaded signature {signature_filepath} to Rekor")
     else:
         raise ConanException(f"Signature method {method} not supported!")
+    return "success"
 
 
-def _verify_common_checks(ref, artifacts_folder, signature_folder, files, output):
+def _verify_common_checks(ref, output, sign_tools):
     # This function serves as common checks and tasks that are independent to any signing method.
     # Returns: config, summary_filepath, signature_filepath, provider, method
 
@@ -299,45 +307,37 @@ def _verify_common_checks(ref, artifacts_folder, signature_folder, files, output
         output.highlight("Verify disabled")
         raise NoActionRequired()
 
-    is_package = isinstance(ref, PkgReference)
-    if is_package:
-        download_filepath = os.path.join(artifacts_folder, "conan_package.tgz")
-    else:
-        download_filepath = os.path.join(artifacts_folder, "conanfile.py")
+    summary_filepath = sign_tools.get_summary_file_path()
 
-    summary_filepath = os.path.join(signature_folder, SUMMARY_FILENAME)
-
-    if not os.path.exists(download_filepath) and not os.path.exists(summary_filepath):
+    if not sign_tools.is_pkg_signed():
         output.warning("Could not verify unsigned package.")
         raise NoActionRequired()
 
-    with open(summary_filepath, "r") as file:
-        summary_json = json.load(file)
-        provider = summary_json.get("provider")
-        method = summary_json.get("method")
+    summary_json = sign_tools.load_summary()
+    provider = summary_json.get("provider")
+    method = summary_json.get("method")
 
     if not _should_verify(ref, provider, config):
         raise NoActionRequired()
-
-    # TODO: Verify files listed in summary file correspond to the info in the <files> argument
 
     signature_extension = SIGNATURE_EXTENSIONS.get(method)
     assert signature_extension is not None and "." not in signature_extension
     signature_filepath = f"{summary_filepath}.{signature_extension}"
 
-    if not os.path.exists(summary_filepath) or not os.path.exists(signature_filepath):
+    if not os.path.exists(signature_filepath):
         raise ConanException("Missing signature files!")
-    return config, summary_filepath, signature_filepath, provider, method
+    return config, signature_filepath, provider, method
 
 
-def verify(ref, artifacts_folder, signature_folder, files, output):
+def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, **kwargs):
     try:
-        config, summary_filepath, signature_filepath, provider, method = \
-            _verify_common_checks(ref, artifacts_folder, signature_folder, files, output)
+        config, signature_filepath, provider, method =  _verify_common_checks(ref, output, sign_tools)
     except NoActionRequired:
         return
 
-    # Support different implementations to verify the packages
+    summary_filepath = sign_tools.get_summary_file_path()
+
+    # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
     if method == "sigstore":
         _check_exe_requirements([COSIGN])
         pubkey_filepath = _get_verify_key(ref, provider, config)
@@ -352,6 +352,7 @@ def verify(ref, artifacts_folder, signature_folder, files, output):
         ]
         try:
             _run_command(cosign_verify_cmd)
+            output.info(f"Signature correctly verified with cosign")
         except Exception as exc:
             raise ConanException(f"Error signing artifact {summary_filepath}: {exc}")
 
@@ -375,4 +376,4 @@ def verify(ref, artifacts_folder, signature_folder, files, output):
             output.info(f"Signature {signature_filepath} for {summary_filepath} verified against Rekor!")
     else:
         raise ConanException(f"Signature method {method} not supported!")
-    output.info(f"Package signature verification: ok")
+    return "success"
