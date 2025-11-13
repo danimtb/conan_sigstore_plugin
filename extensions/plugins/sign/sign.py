@@ -29,7 +29,6 @@ from shutil import which
 from conan.api.model.refs import PkgReference
 from conan.api.output import ConanOutput
 from conan.errors import ConanException
-from conan.internal.util.files import sha256sum
 from conan.tools.files import save
 
 
@@ -208,11 +207,10 @@ def _run_command(command):
 def _sign_common_checks(ref, output, sign_tools):
     config = _load_config()
     if not _is_sign_enabled(config):
-        output.highlight("Sign disabled")
-        raise NoActionRequired()
+        raise NoActionRequired("Package sign disabled")
 
     if not _should_sign(ref, config):
-        raise NoActionRequired()
+        raise NoActionRequired("Package excluded from sign")
 
     provider = config.get("sign").get("provider")
     method = config.get("sign").get("method")
@@ -243,8 +241,8 @@ def _sign_common_checks(ref, output, sign_tools):
 def sign(ref, artifacts_folder, signature_folder, output, sign_tools, **kwargs):
     try:
         config, signature_filepath, provider, method = _sign_common_checks(ref, output, sign_tools)
-    except NoActionRequired:
-        return
+    except NoActionRequired as e:
+        return f"{e}"
 
     summary_filepath = sign_tools.get_summary_file_path()
 
@@ -295,7 +293,7 @@ def sign(ref, artifacts_folder, signature_folder, output, sign_tools, **kwargs):
             output.info(f"Uploaded signature {signature_filepath} to Rekor")
     else:
         raise ConanException(f"Signature method {method} not supported!")
-    return "success"
+    return "Success"
 
 
 def _verify_common_checks(ref, output, sign_tools):
@@ -305,13 +303,12 @@ def _verify_common_checks(ref, output, sign_tools):
     config = _load_config()
     if not _is_verify_enabled(config):
         output.highlight("Verify disabled")
-        raise NoActionRequired()
+        raise NoActionRequired("Package signature verification disabled")
 
     summary_filepath = sign_tools.get_summary_file_path()
 
     if not sign_tools.is_pkg_signed():
-        output.warning("Could not verify unsigned package.")
-        raise NoActionRequired()
+        raise NoActionRequired("Warn: Could not verify unsigned package")
 
     summary_json = sign_tools.load_summary()
     provider = summary_json.get("provider")
@@ -331,9 +328,9 @@ def _verify_common_checks(ref, output, sign_tools):
 
 def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, **kwargs):
     try:
-        config, signature_filepath, provider, method =  _verify_common_checks(ref, output, sign_tools)
-    except NoActionRequired:
-        return
+        config, signature_filepath, provider, method = _verify_common_checks(ref, output, sign_tools)
+    except NoActionRequired as e:
+        return f"{e}"
 
     summary_filepath = sign_tools.get_summary_file_path()
 
@@ -376,4 +373,4 @@ def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, *
             output.info(f"Signature {signature_filepath} for {summary_filepath} verified against Rekor!")
     else:
         raise ConanException(f"Signature method {method} not supported!")
-    return "success"
+    return "Success"

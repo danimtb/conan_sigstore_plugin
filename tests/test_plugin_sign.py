@@ -69,25 +69,25 @@ def test_cache_sign_verify(conan_test_package_signing):
     """
     out = run("conan cache verify mypkg/1.0")
     # The package is still not signed
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: WARN: Could not verify unsigned package" in out
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Warn: Could not verify unsigned package" in out
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
+           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Warn: Could not verify unsigned package" in out
 
     out = run("conan cache sign mypkg/1.0")
     assert "Signing artifacts" in out
     # TODO: assert
     # The package is now signed
     out = run("conan cache verify mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Signature correctly verified with cosign" in out
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Signature correctly verified with cosign" in out
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e: Signature correctly verified with cosign" in out
+           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Signature correctly verified with cosign" in out
 
     run("conan install --requires mypkg/1.0 --build mypkg/1.0")
     out = run("conan cache verify mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2: Signature correctly verified with cosign" in out
+    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Signature correctly verified with cosign" in out
     # New built package revision has not been signed
     assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e: WARN: Could not verify unsigned package" in out
+           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Warn: Could not verify unsigned package" in out
 
 
 def test_sigstore(conan_test_package_signing):
