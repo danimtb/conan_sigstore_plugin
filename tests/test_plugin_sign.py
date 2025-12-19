@@ -67,35 +67,43 @@ def test_cache_sign_verify(conan_test_package_signing):
     """
     Test verifying package with conan cache commands
     """
-    out = run("conan cache verify mypkg/1.0")
+    out = run("conan cache verify mypkg/1.0", error=True)
     # The package is still not signed
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Warn: Could not verify unsigned package" in out
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Warn: Could not verify unsigned package" in out
+    assert "ERROR: No signatures found to verify" in out
 
     out = run("conan cache sign mypkg/1.0")
-    assert "Signing artifacts" in out
+    assert "Generating signature file" in out
     # TODO: assert
     # The package is now signed
     out = run("conan cache verify mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Signature correctly verified with cosign" in out
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Signature correctly verified with cosign" in out
+    assert "Signature correctly verified with cosign" in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
     run("conan install --requires mypkg/1.0 --build mypkg/1.0")
-    out = run("conan cache verify mypkg/1.0")
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2\r\n    :: Signature correctly verified with cosign" in out
+    out = run("conan cache verify mypkg/1.0", error=True)
+    assert "Signature correctly verified with cosign" in out
     # New built package revision has not been signed
-    assert "mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709" \
-           "#4a12a155a57785a80d517f75dafee98e\r\n    :: Warn: Could not verify unsigned package" in out
+    assert textwrap.dedent("""\
+        ERROR: There were some errors in the package signing process. Please check the output.
+        [Package sign] Results:
 
+        mypkg/1.0
+          revisions
+            3db0ffbad94d82b8b7a4cbbb77539bb2
+              packages
+                da39a3ee5e6b4b0d3255bfef95601890afd80709
+                  revisions
+                    4a12a155a57785a80d517f75dafee98e
+                      ERROR: No signatures found to verify
+
+        [Package sign] Summary: OK=1, FAILED=1""") in out.rstrip()
 
 def test_sigstore(conan_test_package_signing):
     """
     Test the plugin's normal flow: upload (sign), install (verify)
     """
     out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run")
-    assert "Signing artifacts" in out
+    assert "Generating signature file" in out
 
     # FIXME: This should be a conan install from a remote
     out = run("conan cache verify mypkg/1.0")

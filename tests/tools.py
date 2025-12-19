@@ -15,6 +15,7 @@ def run(cmd, error=False, *, stdout=subprocess.PIPE, stderr=subprocess.PIPE):
     ret = process.returncode
 
     output = err + out
+    output = output.replace('\r\n', '\n')
     if ret != 0 and not error:
         raise Exception("Failed cmd: {}\n{}".format(cmd, output))
     if ret == 0 and error:

@@ -6,21 +6,20 @@ Requirements: The following executables should be installed and in the PATH.
     - cosign: https://github.com/sigstore/cosign/releases
     - rekor-cli: https://github.com/sigstore/rekor/releases
 
-To use this sigstore plugin, first generate a compatible keypair and define the environment variables for the keys:
+To use this Sigstore plugin, first generate a compatible key pair and define the environment variables for the keys:
 
     $ cosign generate-key-pair --output-key-prefix mykey
 
-This will generate a mykey.key private key and a mykey.pem public key.
+This will generate a mykey.key private key and a mykey.pub public key.
 
 Environment variables:
     - COSIGN_PASSWORD: Set the password of your private key. This is used when using the private key to sign packages.
-    - CONAN_SIGN_PLUGIN_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log  (disabled by default).
-    - CONAN_SIGN_PLUGIN_ENABLE_SIGN: Enable plugin's sign feature (enabled by default).
-    - CONAN_SIGN_PLUGIN_ENABLE_VERIFY: Enable plugin's verify feature (enabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log (Optional, disabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_SIGN: Enable plugin's sign feature (Optional, enabled by default).
+    - CONAN_SIGN_PLUGIN_ENABLE_VERIFY: Enable plugin's verify feature (Optional, enabled by default).
 """
 
 import fnmatch
-import json
 import os
 import subprocess
 import yaml
@@ -30,22 +29,14 @@ from conan.api.model.refs import PkgReference
 from conan.api.output import ConanOutput
 from conan.errors import ConanException
 from conan.tools.files import save
+from conan.tools.pkg_signing.plugin import get_manifest_filepath, load_manifest, load_signatures, verify_files_checksums
 
 
 REKOR_CLI = "rekor-cli"
 COSIGN = "cosign"
 CONFIG_FILENAME = "sigstore_config.yaml"
-SUMMARY_FILENAME = "sign-summary.json"
+SIGSTORE_METHOD = "sigstore"
 
-SIGNATURE_EXTENSIONS = {
-    # Declare the signature extension for other signing methods
-    "sigstore": "sig",
-    "gpg": "gpg",
-    "openssl-dgst": "sig",
-    "openssl-cms": "pem",
-    "minisign": "minisig",
-    "signify": "sig",
-}
 
 CONFIG_TEMPLATE_CONTENT = """
 # Use this section to declare the name of the provider that signs the artifacts,
@@ -61,7 +52,6 @@ CONFIG_TEMPLATE_CONTENT = """
 #     - "**/**@"
 #     - "**/**@other_company"
 #   provider: "MyCompany"               # (string) Name of the provider used to sign the packages.
-#   method: "sigstore"                  # (string) Name of the tool used to sign the packages.
 #   private_key: "{mycompany_privkey}"  # (path -relative to this config file-) Private key to sign the packages with.
 #   public_key: "{mycompany_pubkey}"    # (path -relative to this config file-) Public key to sign the packages with.
 
@@ -126,8 +116,7 @@ def _load_config():
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
     if config.get("sign"):
-        assert config.get("sign").get("provider") is not None
-        assert config.get("sign").get("method") is not None
+        assert config.get("sign").get("provider") is not None, f"Missing sign::provider field in {config_path}"
     return config
 
 
@@ -156,7 +145,9 @@ def _should_sign(ref, config):
 def _get_sign_keys(ref, config):
     if _should_sign(ref, config):
         sign_config = config.get("sign", {})
-        return sign_config.get("private_key"), sign_config.get("public_key")
+        privkey_path = os.path.join(os.path.dirname(__file__), sign_config.get("private_key"))
+        pubkey_path = os.path.join(os.path.dirname(__file__), sign_config.get("public_key"))
+        return privkey_path, pubkey_path
     return None, None
 
 
@@ -204,138 +195,97 @@ def _run_command(command):
         )
 
 
-def _sign_common_checks(ref, output, sign_tools):
+def sign(ref, artifacts_folder, signature_folder, **kwargs):
     config = _load_config()
     if not _is_sign_enabled(config):
-        raise NoActionRequired("Package sign disabled")
+        ConanOutput().highlight("Sign disabled")
 
     if not _should_sign(ref, config):
-        raise NoActionRequired("Package excluded from sign")
+        ConanOutput().highlight("Reference does not match any configuration to be signed")
+        return []
 
     provider = config.get("sign").get("provider")
-    method = config.get("sign").get("method")
+    signature_filename = "pkgsign-manifest.json.sig"
+    signature_filepath = os.path.join(signature_folder, signature_filename)
+    if os.path.isfile(signature_filepath):
+        ConanOutput().warning(f"Package {ref.repr_notime()} is already signed")
+        return load_signatures(signature_folder).get("signatures")  # Return existing signatures
 
-    summary_filepath = sign_tools.get_summary_file_path()
-    signature_extension = SIGNATURE_EXTENSIONS.get(method)
-    assert signature_extension is not None and "." not in signature_extension
-    signature_filepath = f"{summary_filepath}.{signature_extension}"
+    # Sign with Sigstore (checking here a sign::method from the config, could be useful to support different signing implementations (sigstore, openssl, gpg...)
+    _check_exe_requirements([COSIGN])
+    privkey_filepath, pubkey_filepath = _get_sign_keys(ref, config)
+    manifest_filepath = get_manifest_filepath(signature_folder)
 
-    if sign_tools.is_pkg_signed():
-        # Package is already signed: Check provider and method match
-        summary_json = sign_tools.load_summary()
-        summary_provider = summary_json.get("provider")
-        summary_method = summary_json.get("method")
-        output.info(f"Package already signed (provider: {summary_provider}, method: {summary_method})\n"
-                    f"\tSignature file: {signature_filepath}")
-        assert summary_provider == provider,\
-            f"Sign provider does not match (config: {provider} != summary: {summary_provider})"
-        assert summary_method == method, f"Sign method does not match (config: {method} != summary: {summary_method})"
-    else:
-        summary = sign_tools.create_summary_content()
-        summary["provider"] = provider
-        summary["method"] = method
-        sign_tools.save_summary(summary)
-        return config, signature_filepath, provider, method
+    if os.environ.get("COSIGN_PASSWORD") is None:
+        raise ConanException(f"COSIGN_PASSWORD environment variable not set."
+                             f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
 
+    ConanOutput().info(f"Generating signature file at {signature_filepath} from manifest file {manifest_filepath} "
+                       f"using private key {privkey_filepath}")
 
-def sign(ref, artifacts_folder, signature_folder, output, sign_tools, **kwargs):
+    cosign_sign_cmd = [
+        "cosign",
+        "sign-blob",
+        "--key", privkey_filepath,
+        "--output-signature", signature_filepath,
+        "-y",
+        manifest_filepath,
+    ]
     try:
-        config, signature_filepath, provider, method = _sign_common_checks(ref, output, sign_tools)
-    except NoActionRequired as e:
-        return f"{e}"
+        _run_command(cosign_sign_cmd)
+    except Exception as exc:
+        raise ConanException(f"Error signing artifact {manifest_filepath}: {exc}")
 
-    summary_filepath = sign_tools.get_summary_file_path()
+    ConanOutput().info(f"Created signature for file {manifest_filepath} at {signature_filepath}")
 
-    # Support different signing implementations (sigstore, openssl, gpg...) to sign the packages
-    if method == "sigstore":
-        _check_exe_requirements([COSIGN])
-        privkey_filepath, pubkey_filepath = _get_sign_keys(ref, config)
-
-        if os.environ.get("COSIGN_PASSWORD") is None:
-            raise ConanException(f"COSIGN_PASSWORD environment variable not set."
-                                 f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
-
-        output.info(f"Signing artifacts from {artifacts_folder} to {signature_folder}, "
-                    f"using private key {privkey_filepath}")
-
-        cosign_sign_cmd = [
-            "cosign",
-            "sign-blob",
-            "--key", privkey_filepath,
-            "--output-signature", signature_filepath,
-            "-y",
-            summary_filepath,
+    if not _is_rekor_enabled(config.get("sign")):
+        ConanOutput().highlight(f"Rekor disabled. Skipping rekor upload command.")
+    else:
+        _check_exe_requirements([REKOR_CLI])
+        # Upload to Rekor
+        rekor_upload_cmd = [
+            REKOR_CLI,
+            "upload",
+            "--pki-format", "x509",
+            "--signature", signature_filepath,
+            "--public-key", pubkey_filepath,
+            "--artifact", manifest_filepath
         ]
         try:
-            _run_command(cosign_sign_cmd)
+            _run_command(rekor_upload_cmd)
         except Exception as exc:
-            raise ConanException(f"Error signing artifact {summary_filepath}: {exc}")
-
-        output.info(f"Created signature for file {summary_filepath} at {signature_filepath}")
-
-        if not _is_rekor_enabled(config.get("sign")):
-            output.highlight(f"Rekor disabled. Skipping rekor upload command.")
-        else:
-            _check_exe_requirements([REKOR_CLI])
-            # Upload to Rekor
-            rekor_upload_cmd = [
-                REKOR_CLI,
-                "upload",
-                "--pki-format", "x509",
-                "--signature", signature_filepath,
-                "--public-key", pubkey_filepath,
-                "--artifact", summary_filepath
-            ]
-            try:
-                _run_command(rekor_upload_cmd)
-            except Exception as exc:
-                raise ConanException(f"Error uploading artifact sign {signature_filepath}: {exc}")
-            output.info(f"Uploaded signature {signature_filepath} to Rekor")
-    else:
-        raise ConanException(f"Signature method {method} not supported!")
-    return "Success"
+            raise ConanException(f"Error uploading artifact sign {signature_filepath}: {exc}")
+        ConanOutput().info(f"Uploaded signature {signature_filepath} to Rekor")
+    return [{"method": SIGSTORE_METHOD,
+             "provider": provider,
+             "sign_artifacts": {"signature": signature_filename}}]
 
 
-def _verify_common_checks(ref, output, sign_tools):
-    # This function serves as common checks and tasks that are independent to any signing method.
-    # Returns: config, summary_filepath, signature_filepath, provider, method
-
+def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
     config = _load_config()
     if not _is_verify_enabled(config):
-        output.highlight("Verify disabled")
-        raise NoActionRequired("Package signature verification disabled")
+        ConanOutput().highlight("Verify disabled")
+        return
+    try:
+        signature = load_signatures(signature_folder).get("signatures")[0]
+    except Exception:
+        raise ConanException("No signatures found to verify")
 
-    summary_filepath = sign_tools.get_summary_file_path()
-
-    if not sign_tools.is_pkg_signed():
-        raise NoActionRequired("Warn: Could not verify unsigned package")
-
-    summary_json = sign_tools.load_summary()
-    provider = summary_json.get("provider")
-    method = summary_json.get("method")
+    signature = load_signatures(signature_folder).get("signatures")[0]
+    provider = signature.get("provider")
+    method = signature.get("method")
 
     if not _should_verify(ref, provider, config):
-        raise NoActionRequired()
+        ConanOutput().highlight("Reference does not match any configuration to be verified")
+        return
 
-    signature_extension = SIGNATURE_EXTENSIONS.get(method)
-    assert signature_extension is not None and "." not in signature_extension
-    signature_filepath = f"{summary_filepath}.{signature_extension}"
+    verify_files_checksums(signature_folder, files)
 
-    if not os.path.exists(signature_filepath):
-        raise ConanException("Missing signature files!")
-    return config, signature_filepath, provider, method
-
-
-def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, **kwargs):
-    try:
-        config, signature_filepath, provider, method = _verify_common_checks(ref, output, sign_tools)
-    except NoActionRequired as e:
-        return f"{e}"
-
-    summary_filepath = sign_tools.get_summary_file_path()
+    signature_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("signature"))
+    manifest_filepath = get_manifest_filepath(signature_folder)
 
     # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
-    if method == "sigstore":
+    if method == SIGSTORE_METHOD:
         _check_exe_requirements([COSIGN])
         pubkey_filepath = _get_verify_key(ref, provider, config)
 
@@ -345,16 +295,16 @@ def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, *
             "verify-blob",
             "--key", pubkey_filepath,
             "--signature", signature_filepath,
-            summary_filepath,
+            manifest_filepath
         ]
         try:
             _run_command(cosign_verify_cmd)
-            output.info(f"Signature correctly verified with cosign")
+            ConanOutput().info(f"Signature correctly verified with cosign")
         except Exception as exc:
-            raise ConanException(f"Error signing artifact {summary_filepath}: {exc}")
+            raise ConanException(f"Error verifying artifact {manifest_filepath}: {exc}")
 
         if not _is_rekor_enabled(config.get("verify", {}).get("providers", {}).get(provider, {})):
-            output.warning(f"Rekor disabled. Skipping rekor verify command.")
+            ConanOutput().warning(f"Rekor disabled. Skipping rekor verify command.")
         else:
             _check_exe_requirements([REKOR_CLI])
             # Verify against Rekor
@@ -364,13 +314,12 @@ def verify(ref, artifacts_folder, signature_folder, files, output, sign_tools, *
                 "--pki-format", "x509",
                 "--signature", signature_filepath,
                 "--public-key", pubkey_filepath,
-                "--artifact", summary_filepath,
+                "--artifact", manifest_filepath,
             ]
             try:
                 _run_command(rekor_verify_cmd)
             except Exception as exc:
-                raise ConanException(f"Error verifying signature for {summary_filepath}: {exc}")
-            output.info(f"Signature {signature_filepath} for {summary_filepath} verified against Rekor!")
+                raise ConanException(f"Error verifying signature for {manifest_filepath}: {exc}")
+            ConanOutput().info(f"Signature {signature_filepath} for {manifest_filepath} verified against Rekor!")
     else:
         raise ConanException(f"Signature method {method} not supported!")
-    return "Success"
