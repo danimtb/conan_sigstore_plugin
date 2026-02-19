@@ -4,7 +4,6 @@ record the signature into the Rekor transparency log for later verifications.
 
 Requirements: The following executables should be installed and in the PATH.
     - cosign: https://github.com/sigstore/cosign/releases
-    - rekor-cli: https://github.com/sigstore/rekor/releases
 
 To use this Sigstore plugin, first generate a compatible key pair and define the environment variables for the keys:
 
@@ -14,27 +13,26 @@ This will generate a mykey.key private key and a mykey.pub public key.
 
 Environment variables:
     - COSIGN_PASSWORD: Set the password of your private key. This is used when using the private key to sign packages.
-    - CONAN_SIGN_PLUGIN_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log (Optional, disabled by default).
-    - CONAN_SIGN_PLUGIN_ENABLE_SIGN: Enable plugin's sign feature (Optional, enabled by default).
-    - CONAN_SIGN_PLUGIN_ENABLE_VERIFY: Enable plugin's verify feature (Optional, enabled by default).
+    - CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR: Enable sign and verify using the Rekor CLI and rekor log (Optional, disabled by default).
+    - CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN: Enable plugin's sign feature (Optional, enabled by default).
+    - CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY: Enable plugin's verify feature (Optional, enabled by default).
 """
 
-import fnmatch
+import json
+import re
 import os
 import subprocess
+from inspect import signature
+
 import yaml
-from shutil import which
 
 from conan.api.model.refs import PkgReference
 from conan.api.output import ConanOutput
 from conan.errors import ConanException
-from conan.tools.files import save
-from conan.tools.pkg_signing.plugin import get_manifest_filepath, load_manifest, load_signatures, verify_files_checksums
 
 
-REKOR_CLI = "rekor-cli"
 COSIGN = "cosign"
-CONFIG_FILENAME = "sigstore_config.yaml"
+CONFIG_FILENAME = "sigstore-config.yaml"
 SIGSTORE_METHOD = "sigstore"
 
 
@@ -46,145 +44,127 @@ CONFIG_TEMPLATE_CONTENT = """
 #   enabled: true                       # (bool) Enable the signature of packages.
 #   use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
 #   references:                         # (list) References or pattern of references that should be signed.
-#     - "**/**@**/**"
-#     - "mylib/1.0.0"
+#     - "*/*"                           # Includes all packages with name/version format.
+#     - "*/*@*/*"                       # Includes all packages with name/version@user format.
+#     - "*/*@*/*"                       # Includes all packages with name/version@user/channel format.
 #   exclude_references:                 # (list) References or pattern of references that should NOT be signed.
-#     - "**/**@"
-#     - "**/**@other_company"
-#   provider: "MyCompany"               # (string) Name of the provider used to sign the packages.
-#   private_key: "{mycompany_privkey}"  # (path -relative to this config file-) Private key to sign the packages with.
-#   public_key: "{mycompany_pubkey}"    # (path -relative to this config file-) Public key to sign the packages with.
+#     - "**/**@other_company"           # Excludes packages from "other_company".
+#   provider: "mycompany"               # (string) Name of the provider used to sign the packages.
+#   private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
+#   public_key: "path/to/pubkey.pem"    # (absolute path) Public key to sign the packages with.
 
 
 # Use this section to verify the references for each provider using the corresponding public key.
 #
 # verify:
-#   enabled: true                                     # (bool) Enable the verification signature of packages.
-#   providers:                                        # (list) Providers that sign the packages for verification.
-#     conancenter:
-#       references:                                   # (list) References or pattern that should be verified.
-#         - "**/**@"
-#       exclude_references:                           # (list) References or pattern that should NOT be verified.
-#         - "zlib/1.2.11@"
-#       public_key: "path/to/conancenter-public.pem"  # (path relative to this file) Public key to verify the packages with.
-#       use_rekor: false                              # (bool) Enable verifying the signature against the Rekor log.
+#   enabled: true                         # (bool) Enable the verification signature of packages.
+#   use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
+#   providers:                            # (list) Providers that sign the packages for verification.
+#     conancenter:                        # Name of the provider that signed the packages
+#       references:                       # (list) References or pattern that should be verified.
+#         - "*/*"                         # Includes all packages with name/version format.
+#       exclude_references:               # (list) References or pattern that should NOT be verified.
+#         - "zlib/1.2.11"
+#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 #     mycompany:
 #       references:
-#         - "**/**@**/**"                             # Example pattern to verify all the references for mycompany provider.
+#         - "*/*@mycomany/**"             # Verify all the references for mycompany user.
 #       exclude_references:
-#         - "**/**@**/testing"                        # Except for those references that have testing as channel.
-#       public_key: "path/to/mycompany-public.pem"
-#       use_rekor: true
+#         - "*/*@mycompany/testing"       # Exclude verification of references that have testing channel.
+#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 """
 
 
-class NoActionRequired(Exception):
-    """Raised to indicate that no action is required and execution should return early."""
-    pass
-
-
 def _is_rekor_enabled(partial_config):
-    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_REKOR", False))
-    if env_var:
-        return True
-    else:
-        return partial_config.get("use_rekor", False)
+    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR", False))
+    return env_var or partial_config.get("use_rekor", False)
 
 
 def _is_sign_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_SIGN", True))
-    if not env_var:
-        return False
-    else:
-        return config.get("sign", {}).get("enabled", True)
+    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN", True))
+    return env_var and config.get("sign", {}).get("enabled", True)
 
 
 def _is_verify_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGN_PLUGIN_ENABLE_VERIFY", True))
-    if not env_var:
-        return False
-    else:
-        return config.get("verify", {}).get("enabled", True)
+    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY", True))
+    return env_var and config.get("verify", {}).get("enabled", True)
 
 
 def _load_config():
     config_path = os.path.join(os.path.dirname(__file__), CONFIG_FILENAME)
     if not os.path.exists(config_path):
-        ConanOutput().highligh(f"Conan Sigstore plugin configuration file not found. "
+        ConanOutput().highlight(f"Conan Sigstore plugin configuration file not found. "
                                f"Creating template at {config_path}")
-        save(None, config_path, CONFIG_TEMPLATE_CONTENT)
+        with open(config_path, "w") as file:
+            file.write(CONFIG_TEMPLATE_CONTENT)
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
     if config.get("sign"):
-        assert config.get("sign").get("provider") is not None, f"Missing sign::provider field in {config_path}"
+        assert config.get("sign").get("provider") is not None, f"Missing 'sign.provider' field in {config_path}"
     return config
+
+
+def _reference_fnmatch(reference, pattern):
+    if pattern.count('/') != reference.count('/') or pattern.count('@') != reference.count('@'):
+        return False
+    regex_pattern = re.escape(pattern)
+    regex_pattern = regex_pattern.replace(r'\*', r'[^/@]+')
+    return bool(re.fullmatch(regex_pattern, reference))
 
 
 def _format_reference(reference):
     if isinstance(reference, PkgReference):
         reference = reference.ref
-    ref_str = str(reference)
-    if reference.user is None:
-        ref_str = f"{ref_str}@"
-    return ref_str
+    return str(reference)
 
 
-def _should_sign(ref, config):
+def _should_sign_reference(ref, config):
     reference = _format_reference(ref)
     sign_config = config.get("sign", [])
     if sign_config:
         for rule in sign_config.get("exclude_references", []):
-            if fnmatch.fnmatch(reference, rule):
+            if _reference_fnmatch(reference, rule):
                 return False
         for rule in sign_config.get("references", []):
-            if fnmatch.fnmatch(reference, rule):
+            if _reference_fnmatch(reference, rule):
                 return True
     return False
 
 
-def _get_sign_keys(ref, config):
-    if _should_sign(ref, config):
-        sign_config = config.get("sign", {})
-        privkey_path = os.path.join(os.path.dirname(__file__), sign_config.get("private_key"))
-        pubkey_path = os.path.join(os.path.dirname(__file__), sign_config.get("public_key"))
-        return privkey_path, pubkey_path
-    return None, None
+def _get_sign_keys(config):
+    sign_config = config.get("sign", {})
+    privkey_path = sign_config.get("private_key")
+    assert os.path.isfile(privkey_path), f"Private key path not found at '{privkey_path}'"
+    pubkey_path = sign_config.get("public_key")
+    assert os.path.isfile(pubkey_path), f"Public key path not found at '{pubkey_path}'"
+    return privkey_path, pubkey_path
 
 
-def _should_verify(ref, provider, config):
-    ref_str = _format_reference(ref)
+def _should_verify_reference(ref, provider, config):
+    reference = _format_reference(ref)
     verify_config = config.get("verify")
     if verify_config:
         provider_config = verify_config.get("providers", {}).get(provider)
         if provider_config:
             for rule in provider_config.get("exclude_references", []):
-                if fnmatch.fnmatch(ref_str, rule):
+                if _reference_fnmatch(reference, rule):
                     return False
             for rule in provider_config.get("references", []):
-                if fnmatch.fnmatch(ref_str, rule):
+                if _reference_fnmatch(reference, rule):
                     return True
     return False
 
 
 def _get_verify_key(reference, provider, config):
-    if _should_verify(reference, provider, config):
-        provider_config = config.get("verify", {}).get("providers", {}).get(provider, {})
-        return provider_config.get("public_key")
-    return None
-
-
-def _check_exe_requirements(requirements):
-    for exe in requirements:
-        if not which(exe):
-            raise ConanException(f"Missing {exe} binary. {exe} is required to sign the artifacts. "
-                                 f"Make sure it is installed in your system and available in the PATH")
+    provider_config = config.get("verify", {}).get("providers", {}).get(provider, {})
+    pubkey_path = provider_config.get("public_key")
+    assert os.path.isfile(pubkey_path), f"Public key path not found at '{pubkey_path}'"
+    return pubkey_path
 
 
 def _run_command(command):
     result = subprocess.run(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         text=True,  # returns strings instead of bytes
         check=False  # we'll manually handle error checking
     )
@@ -200,21 +180,28 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     if not _is_sign_enabled(config):
         ConanOutput().highlight("Sign disabled")
 
-    if not _should_sign(ref, config):
+    if not _should_sign_reference(ref, config):
         ConanOutput().highlight("Reference does not match any configuration to be signed")
         return []
 
+    # Check if package is already signed (pkgsign-signatures.json should exist and have the same signature metadata)
     provider = config.get("sign").get("provider")
+    signatures_filepath = os.path.join(signature_folder, "pkgsign-signatures.json")
+    if os.path.isfile(signatures_filepath):
+        with open(signatures_filepath, "r", encoding="utf-8") as f:
+            signatures = json.loads(f.read()).get("signatures")
+        if signatures:
+            already_signed = [s for s in signatures if
+                              s.get("provider") == provider and s.get("method") == SIGSTORE_METHOD]
+            if already_signed:
+                ConanOutput().warning(f"Package {ref.repr_notime()} is already signed")
+                return []  # Return empty list to avoid saving the signatures again
+
+    # Sign with Sigstore
+    privkey_filepath, pubkey_filepath = _get_sign_keys(config)
+    manifest_filepath = os.path.join(signature_folder, "pkgsign-manifest.json")
     signature_filename = "pkgsign-manifest.json.sig"
     signature_filepath = os.path.join(signature_folder, signature_filename)
-    if os.path.isfile(signature_filepath):
-        ConanOutput().warning(f"Package {ref.repr_notime()} is already signed")
-        return load_signatures(signature_folder).get("signatures")  # Return existing signatures
-
-    # Sign with Sigstore (checking here a sign::method from the config, could be useful to support different signing implementations (sigstore, openssl, gpg...)
-    _check_exe_requirements([COSIGN])
-    privkey_filepath, pubkey_filepath = _get_sign_keys(ref, config)
-    manifest_filepath = get_manifest_filepath(signature_folder)
 
     if os.environ.get("COSIGN_PASSWORD") is None:
         raise ConanException(f"COSIGN_PASSWORD environment variable not set."
@@ -223,6 +210,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     ConanOutput().info(f"Generating signature file at {signature_filepath} from manifest file {manifest_filepath} "
                        f"using private key {privkey_filepath}")
 
+    use_rekor = _is_rekor_enabled(config.get("sign"))
     cosign_sign_cmd = [
         "cosign",
         "sign-blob",
@@ -231,34 +219,20 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
         "-y",
         manifest_filepath,
     ]
+    if use_rekor:
+        cosign_sign_cmd.append("--tlog-upload")
     try:
         _run_command(cosign_sign_cmd)
     except Exception as exc:
         raise ConanException(f"Error signing artifact {manifest_filepath}: {exc}")
 
     ConanOutput().info(f"Created signature for file {manifest_filepath} at {signature_filepath}")
-
-    if not _is_rekor_enabled(config.get("sign")):
-        ConanOutput().highlight(f"Rekor disabled. Skipping rekor upload command.")
-    else:
-        _check_exe_requirements([REKOR_CLI])
-        # Upload to Rekor
-        rekor_upload_cmd = [
-            REKOR_CLI,
-            "upload",
-            "--pki-format", "x509",
-            "--signature", signature_filepath,
-            "--public-key", pubkey_filepath,
-            "--artifact", manifest_filepath
-        ]
-        try:
-            _run_command(rekor_upload_cmd)
-        except Exception as exc:
-            raise ConanException(f"Error uploading artifact sign {signature_filepath}: {exc}")
+    if use_rekor:
         ConanOutput().info(f"Uploaded signature {signature_filepath} to Rekor")
     return [{"method": SIGSTORE_METHOD,
              "provider": provider,
-             "sign_artifacts": {"signature": signature_filename}}]
+             "sign_artifacts": {"manifest": "pkgsign-manifest.json",
+                                "signature": signature_filename}}]
 
 
 def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
@@ -266,60 +240,51 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
     if not _is_verify_enabled(config):
         ConanOutput().highlight("Verify disabled")
         return
+
+    signatures_path = os.path.join(signature_folder, "pkgsign-signatures.json")
     try:
-        signature = load_signatures(signature_folder).get("signatures")[0]
+        with open(signatures_path, "r", encoding="utf-8") as f:
+            signatures = json.loads(f.read()).get("signatures")
     except Exception:
-        raise ConanException("No signatures found to verify")
-
-    signature = load_signatures(signature_folder).get("signatures")[0]
-    provider = signature.get("provider")
-    method = signature.get("method")
-
-    if not _should_verify(ref, provider, config):
-        ConanOutput().highlight("Reference does not match any configuration to be verified")
+        ConanOutput().warning("Could not verify unsigned package")
         return
 
-    verify_files_checksums(signature_folder, files)
+    if not signatures:
+        ConanOutput().warning("No signatures found in 'pkgsign-signatures.json' file. Could not verify package")
 
-    signature_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("signature"))
-    manifest_filepath = get_manifest_filepath(signature_folder)
+    for signature in signatures:
+        provider = signature.get("provider")
 
-    # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
-    if method == SIGSTORE_METHOD:
-        _check_exe_requirements([COSIGN])
-        pubkey_filepath = _get_verify_key(ref, provider, config)
+        if not _should_verify_reference(ref, provider, config):
+            ConanOutput().highlight("Reference does not match any configuration to be verified")
+            return
 
-        # Verify sha file
-        cosign_verify_cmd = [
-            "cosign",
-            "verify-blob",
-            "--key", pubkey_filepath,
-            "--signature", signature_filepath,
-            manifest_filepath
-        ]
-        try:
-            _run_command(cosign_verify_cmd)
-            ConanOutput().info(f"Signature correctly verified with cosign")
-        except Exception as exc:
-            raise ConanException(f"Error verifying artifact {manifest_filepath}: {exc}")
+        manifest_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("manifest"))
+        signature_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("signature"))
 
-        if not _is_rekor_enabled(config.get("verify", {}).get("providers", {}).get(provider, {})):
-            ConanOutput().warning(f"Rekor disabled. Skipping rekor verify command.")
-        else:
-            _check_exe_requirements([REKOR_CLI])
-            # Verify against Rekor
-            rekor_verify_cmd = [
-                REKOR_CLI,
-                "verify",
-                "--pki-format", "x509",
+        signature_method = signature.get("method")
+        # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
+        if signature_method == SIGSTORE_METHOD:
+            pubkey_filepath = _get_verify_key(ref, provider, config)
+
+            use_rekor = _is_rekor_enabled(config.get("verify"))
+
+            # Verify sha file
+            cosign_verify_cmd = [
+                "cosign",
+                "verify-blob",
+                "--key", pubkey_filepath,
                 "--signature", signature_filepath,
-                "--public-key", pubkey_filepath,
-                "--artifact", manifest_filepath,
+                manifest_filepath
             ]
+            if use_rekor:
+                cosign_verify_cmd.append("--tlog-upload")
             try:
-                _run_command(rekor_verify_cmd)
+                _run_command(cosign_verify_cmd)
             except Exception as exc:
-                raise ConanException(f"Error verifying signature for {manifest_filepath}: {exc}")
-            ConanOutput().info(f"Signature {signature_filepath} for {manifest_filepath} verified against Rekor!")
-    else:
-        raise ConanException(f"Signature method {method} not supported!")
+                raise ConanException(f"Error verifying artifact {manifest_filepath}: {exc}")
+            ConanOutput().info(f"Signature correctly verified with cosign")
+            if use_rekor:
+                ConanOutput().info(f"Signature {signature_filepath} for {manifest_filepath} verified against Rekor!")
+        else:
+            raise ConanException(f"Signature method {signature_method} not supported!")

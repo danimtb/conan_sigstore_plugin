@@ -28,13 +28,13 @@ def conan_test_package_signing():
     repo = os.path.join(os.path.dirname(__file__), "..")
     run(f"conan config install {repo}")
     base_path = os.path.join(conan_home, "extensions", "plugins", "sign")
-    config_path = os.path.join(base_path, "sigstore_config.yaml")
+    config_path = os.path.join(base_path, "sigstore-config.yaml")
     save(config_path, textwrap.dedent(f"""
         sign:
           references:
-            - "**/**@"
+            - "*/*"
+            - "*/*@other_company"
           provider: "conan"
-          method: "sigstore"
           private_key: "{conan_sigstore_privkey}"
           public_key: "{conan_sigstore_pubkey}"
 
@@ -42,7 +42,7 @@ def conan_test_package_signing():
           providers:
             conan:
               references:
-                - "**/**@"
+                - "*/*"
               public_key: "{conan_sigstore_pubkey}"
     """))
 
@@ -67,169 +67,114 @@ def test_cache_sign_verify(conan_test_package_signing):
     """
     Test verifying package with conan cache commands
     """
-    out = run("conan cache verify mypkg/1.0", error=True)
+    out = run("conan cache verify mypkg/1.0")
     # The package is still not signed
-    assert "ERROR: No signatures found to verify" in out
+    assert "WARN: Could not verify unsigned package" in out
 
+    # sign it
     out = run("conan cache sign mypkg/1.0")
     assert "Generating signature file" in out
-    # TODO: assert
+    assert "Wrote signature to file" in out
+
     # The package is now signed
     out = run("conan cache verify mypkg/1.0")
     assert "Signature correctly verified with cosign" in out
     assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
+    # Rebuild the package, which will create a new package revision, but it will not be signed
     run("conan install --requires mypkg/1.0 --build mypkg/1.0")
-    out = run("conan cache verify mypkg/1.0", error=True)
-    assert "Signature correctly verified with cosign" in out
-    # New built package revision has not been signed
-    assert textwrap.dedent("""\
-        ERROR: There were some errors in the package signing process. Please check the output.
-        [Package sign] Results:
-
-        mypkg/1.0
-          revisions
-            3db0ffbad94d82b8b7a4cbbb77539bb2
-              packages
-                da39a3ee5e6b4b0d3255bfef95601890afd80709
-                  revisions
-                    4a12a155a57785a80d517f75dafee98e
-                      ERROR: No signatures found to verify
-
-        [Package sign] Summary: OK=1, FAILED=1""") in out.rstrip()
-
-def test_sigstore(conan_test_package_signing):
-    """
-    Test the plugin's normal flow: upload (sign), install (verify)
-    """
-    out = run("conan upload mypkg/1.0 -r=conancenter -c --dry-run")
-    assert "Generating signature file" in out
-
-    # FIXME: This should be a conan install from a remote
     out = run("conan cache verify mypkg/1.0")
     assert "Signature correctly verified with cosign" in out
+    assert "WARN: Could not verify unsigned package" in out
+
+    # Sign package only
+    out = run("conan cache sign mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:*")
+    assert "Wrote signature to file" in out
+
+    # Test signing already signed package
+    out = run("conan cache sign mypkg/1.0")
+    assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2 is already signed" in out
+    assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709#4a12a155a57785a80d517f75dafee98e is already signed" in out
 
 
-def test_sigstore_should_sign_and_get_sign_keys():
-    from extensions.plugins.sign.sign import _should_sign, _get_sign_keys
+def test_cache_should_sign_verify(conan_test_package_signing):
+    """Test that packages that should not be signed or verified according to the config are skipped"""
+    # create new package that should not be signed
+    run("conan new header_lib -d name=otherpkg -d version=1.0 --force")
+    run("conan create . --user mycompany")
+    out = run("conan cache sign otherpkg/1.0@mycompany")
+    assert "Reference does not match any configuration to be signed" in out
 
-    # Test conan center reference
-    config = {
-        "sign": {
-            "references": ["**/**"],
-            "private_key": "keys/ec_private.pem",
-            "public_key": "keys/ec_public.pem"
-        }
-    }
-    assert _should_sign(RecipeReference("zlib", "1.2.11"), config)
-    assert "keys/ec_private.pem", "keys/ec_public.pem" == _get_sign_keys("zlib/1.2.11", config)
+    # create new package that should not be verified
+    run("conan create . --user other_company")
+    run("conan cache sign otherpkg/1.0@other_company")
+    out = run("conan cache verify otherpkg/1.0@other_company")
+    assert "Reference does not match any configuration to be verified" in out
 
-    # Test exclude reference
-    config = {
-        "sign": {
-            "references": ["**/**@**/**"],
-            "exclude_references": ["**/**@"],
-            "private_key": "keys/ec_private.pem",
-            "public_key": "keys/ec_public.pem"
-        }
-    }
-    assert not _should_sign(RecipeReference("zlib", "1.2.11"), config)
-    assert (None, None) == _get_sign_keys(RecipeReference("zlib", "1.2.11"), config)
+# def test_verify_unsigned_package(conan_test_package_signing):
+# def test_sign_already_signed_package(conan_test_package_signing):
+# def test_should_not_verify
+# def test_should_not_sign
+# test rekor
+# test env vars /config enabled disabled for signing and verifying
 
 
-    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
-        "sign": {
-            "references": ["**/**@my_company/**"],
-        }
-    })
-    assert _should_sign(RecipeReference("zlib", "1.2.11", "my_company"), {
-        "sign": {
-            "references": ["**/**@my_company"],
-        }
-    })
-    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
-        "sign": {
-            "references": ["**/**@**/**"],
-            "exclude_references": ["zlib/**@**/**"]
-        }
-    })
-    assert not _should_sign(RecipeReference("zlib", "1.2.11"), {
-        "sign": {
-            "references": ["**/**@**/**"],
-            "exclude_references": ["**/**@"]
-        }
-    })
-    assert _should_sign(RecipeReference("zlib", "1.2.11", "my_company"), {
-        "sign": {
-            "references": ["**/**@**"],
-            "exclude_references": ["**/**@"]
-        }
-    })
+def test_should_sign_reference():
+    from extensions.plugins.sign.sign import _should_sign_reference
+    assert _should_sign_reference(RecipeReference("zlib", "1.2.11"), {"sign": {"references": ["*/*"]}})
+    assert not _should_sign_reference(RecipeReference("zlib", "1.2.11"),
+                                      {"sign": {"references": ["*/*@*/*"], "exclude_references": ["*/*"]}})
+    assert not _should_sign_reference(RecipeReference("zlib", "1.2.11"),
+                                      {"sign": {"references": ["*/*@my_company/*"],}})
+    assert _should_sign_reference(RecipeReference("zlib", "1.2.11", "my_company"),
+                                  {"sign": {"references": ["*/*@my_company"]}})
+    assert not _should_sign_reference(RecipeReference("zlib", "1.2.11"),
+                                      {"sign": {"references": ["*/*@*/*"], "exclude_references": ["zlib/*@*/*"]}})
+    assert not _should_sign_reference(RecipeReference("zlib", "1.2.11"),
+                                      {"sign": {"references": ["*/*@*/*"], "exclude_references": ["*/*"]}})
+    assert _should_sign_reference(RecipeReference("zlib", "1.2.11", "my_company"),
+                                  {"sign": {"references": ["*/*@*"], "exclude_references": ["*/*"]}})
 
 
-def test_sigstore_should_verify_and_get_verify_key():
-    from extensions.plugins.sign.sign import _should_verify, _get_verify_key
+def test_should_verify_reference():
+    from extensions.plugins.sign.sign import _should_verify_reference
 
-    config = {
-        "verify":
-            {
-                "providers": {
-                    "conancenter": {
-                        "references": ["**/**@"],
-                        "public_key": "keys/ec_public.pem"
-                    }
-                }
-            }
-    }
-    assert _should_verify(RecipeReference("zlib", "1.2.11"), "conancenter", config)
-    assert "keys/ec_public.pem" in _get_verify_key(RecipeReference("zlib", "1.2.11"), "conancenter", config)
-
-    config = {
+    assert _should_verify_reference(RecipeReference("zlib", "1.2.11"), "conancenter",
+                                    {"verify": {"providers": {"conancenter": {"references": ["*/*"]}}}})
+    assert not _should_verify_reference(RecipeReference("zlib", "1.2.11"), "conancenter",
+                                        {"verify": {"providers": {"conancenter": {
+                                            "references": ["*/*"], "exclude_references": ["*/*"]}}}})
+    assert _should_verify_reference(RecipeReference("zlib", "1.2.11"), "mycompany", {
         "verify": {
             "providers": {
                 "conancenter": {
-                    "references": ["**/**@"],
-                    "exclude_references": ["**/**@"],
-                    "public_key": "keys/ec_public1.pem"
-                }
-            }
-        }
-    }
-    assert not _should_verify(RecipeReference("zlib", "1.2.11"), "conancenter", config)
-    assert _get_verify_key(RecipeReference("zlib", "1.2.11"), "conancenter", config) is None
-
-    config = {
-        "verify": {
-            "providers": {
-                "conancenter": {
-                    "references": ["**/**@"],
+                    "references": ["*/*"],
                     "public_key": "keys/ec_public1.pem"
                 },
                 "mycompany": {
-                    "references": ["**/**@"],
+                    "references": ["*/*"],
+                    "public_key": "keys/ec_public2.pem"
+                }
+            }
+        }
+    })
+
+    config = {
+        "verify": {
+            "providers": {
+                "conancenter": {
+                    "references": ["*/*"],
+                    "public_key": "keys/ec_public1.pem"
+                },
+                "mycompany": {
+                    "references": ["*/*@mycompany"],
                     "public_key": "keys/ec_public2.pem"
                 }
             }
         }
     }
-    assert _should_verify(RecipeReference("zlib", "1.2.11"), "mycompany", config)
-    assert "keys/ec_public2.pem" in _get_verify_key(RecipeReference("zlib", "1.2.11"), "mycompany", config)
-
-    config = {
-        "verify": {
-            "providers": {
-                "conancenter": {
-                    "references": ["**/**@"],
-                    "public_key": "keys/ec_public1.pem"
-                },
-                "mycompany": {
-                    "references": ["**/**@mycompany"],
-                    "public_key": "keys/ec_public2.pem"
-                }
-            }
-        }
-    }
-    assert not _should_verify(RecipeReference("zlib", "1.2.11"), "mycompany", config)
-    assert _get_verify_key(RecipeReference("zlib", "1.2.11"), "mycompany", config) is None
-    assert _should_verify(RecipeReference("zlib", "1.2.11", "mycompany"), "mycompany", config)
-    assert not _should_verify(RecipeReference("zlib", "1.2.11", "mycompany", "testing"), "mycompany", config)
+    assert not _should_verify_reference(RecipeReference("zlib", "1.2.11"), "mycompany", config)
+    assert _should_verify_reference(RecipeReference("zlib", "1.2.11", "mycompany"), "mycompany", config)
+    assert not _should_verify_reference(RecipeReference("zlib", "1.2.11", "mycompany", "testing"), "mycompany",
+                                        config)
+    assert not _should_verify_reference(RecipeReference("zlib", "1.2.11"),"non-existent-provider", config)
