@@ -16,9 +16,11 @@ jobs:
       run: |
         pip install -U pip
         pip install pytest
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3.8.0
     - name: Install Conan develop
       run: |
-        pip install git+https://github.com/danimtb/conan.git@danimtb/feature/sign_plugin
+        pip install git+https://github.com/conan-io/conan.git@develop2
     - name: Run tests - Conan develop / Python 3.8
       run: |
         pytest -v tests
