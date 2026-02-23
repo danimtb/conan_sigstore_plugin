@@ -59,39 +59,39 @@ file for easier customization.
 
 ```yaml
 # Use this section to declare the name of the provider that signs the artifacts,
-# the references that apply to be signed, and the path to the keys.
+# the references that apply to be signed, and the path to the private key.
+
 sign:
-  enabled: true                                 # (bool -default: true-) Enable the signature of packages.
-  use_rekor: false                              # (bool -default: false-) Enable uploading the signature to the public Rekor transparency log.
-  references:                                   # (list) References or pattern of references that should be signed.
-    - "*/*@*/*"
-    - "mylib/1.0.0"
-  exclude_references:                           # (list) References or pattern of references that should NOT be signed.
-    - "*/*"
-    - "*/*@other_company/*"
-  provider: "mycompany"                         # (string) Name of the provider used to sign the packages.
-  private_key: "path/to/mycompany-private.key"  # (absolute path) Private key to sign the packages with.
-  public_key: "path/to/mycompany-public.pub"    # (absolute path) Public key to sign the packages with.
+  enabled: true                       # (bool) Enable the signature of packages.
+  use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
+  provider: "mycompany"               # (string) Name of the provider used to sign the packages.
+  private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
+  references:                         # (list) References or pattern of references that should be signed.
+    - "*/*"                           # Includes all packages with name/version format.
+    - "*/*@*/*"                       # Includes all packages with name/version@user format.
+    - "*/*@*/*"                       # Includes all packages with name/version@user/channel format.
+  exclude_references:                 # (list) References or pattern of references that should NOT be signed.
+    - "**/**@other_company"           # Excludes packages from "other_company".
+
 
 # Use this section to verify the references for each provider using the corresponding public key.
+
 verify:
-  enabled: true                                     # (bool -default: true-) Enable the verification signature of packages.
-  use_rekor: false                                  # (bool -default: false-) Enable verifying the signature against the public Rekor transparency log.
-  providers:                                        # (list) Providers that sign the packages for verification.
-    conancenter:
-      references:                                   # (list) References or pattern that should be verified.
-        - "*/*"
-      exclude_references:                           # (list) References or pattern that should NOT be verified.
+  enabled: true                         # (bool) Enable the verification signature of packages.
+  use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
+  providers:                            # (list) Providers that sign the packages for verification.
+    conancenter:                        # Name of the provider that signed the packages
+      public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
+      references:                       # (list) References or pattern that should be verified.
+        - "*/*"                         # Includes all packages with name/version format.
+      exclude_references:               # (list) References or pattern that should NOT be verified.
         - "zlib/1.2.11"
-      public_key: "path/to/conancenter-public.pub"  # (absolute path) Public key to verify the packages with.
     mycompany:
+      public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
       references:
-        - "*/*@*/*"                                 # Example pattern to verify all the references with user and channel.
-        - "*/*@*"                                   # Example pattern to verify all the references with user.
+        - "*/*@mycomany/**"             # Verify all the references for mycompany user.
       exclude_references:
-        - "**/**@**/testing"                        # Exclude for those references that have testing as channel.
-      public_key: "path/to/mycompany-public.pub"
-      use_rekor: true
+        - "*/*@mycompany/testing"       # Exclude verification of references that have testing channel.
 ```
 
 Each ``provider`` is set to be associated with a key.

@@ -37,20 +37,19 @@ SIGSTORE_METHOD = "sigstore"
 
 CONFIG_TEMPLATE_CONTENT = """
 # Use this section to declare the name of the provider that signs the artifacts,
-# the references that apply to be signed, and the path to the keys.
+# the references that apply to be signed, and the path to the private key.
 #
 # sign:
 #   enabled: true                       # (bool) Enable the signature of packages.
 #   use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
+#   provider: "mycompany"               # (string) Name of the provider used to sign the packages.
+#   private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
 #   references:                         # (list) References or pattern of references that should be signed.
 #     - "*/*"                           # Includes all packages with name/version format.
 #     - "*/*@*/*"                       # Includes all packages with name/version@user format.
 #     - "*/*@*/*"                       # Includes all packages with name/version@user/channel format.
 #   exclude_references:                 # (list) References or pattern of references that should NOT be signed.
 #     - "**/**@other_company"           # Excludes packages from "other_company".
-#   provider: "mycompany"               # (string) Name of the provider used to sign the packages.
-#   private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
-#   public_key: "path/to/pubkey.pem"    # (absolute path) Public key to sign the packages with.
 
 
 # Use this section to verify the references for each provider using the corresponding public key.
@@ -60,17 +59,17 @@ CONFIG_TEMPLATE_CONTENT = """
 #   use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
 #   providers:                            # (list) Providers that sign the packages for verification.
 #     conancenter:                        # Name of the provider that signed the packages
+#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 #       references:                       # (list) References or pattern that should be verified.
 #         - "*/*"                         # Includes all packages with name/version format.
 #       exclude_references:               # (list) References or pattern that should NOT be verified.
 #         - "zlib/1.2.11"
-#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 #     mycompany:
+#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 #       references:
 #         - "*/*@mycomany/**"             # Verify all the references for mycompany user.
 #       exclude_references:
 #         - "*/*@mycompany/testing"       # Exclude verification of references that have testing channel.
-#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
 """
 
 
