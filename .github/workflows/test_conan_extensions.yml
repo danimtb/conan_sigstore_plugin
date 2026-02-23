@@ -19,7 +19,7 @@ jobs:
     - name: Install Cosign
       uses: sigstore/cosign-installer@v3.8.0
       with:
-        cosign-release: 'v3.0.5'
+        cosign-release: 'v3.0.3'
     - name: Install Conan develop
       run: |
         pip install git+https://github.com/conan-io/conan.git@develop2
