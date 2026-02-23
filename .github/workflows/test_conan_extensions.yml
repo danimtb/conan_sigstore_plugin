@@ -17,9 +17,9 @@ jobs:
         pip install -U pip
         pip install pytest
     - name: Install Cosign
-      uses: sigstore/cosign-installer@v3.8.0
+      uses: sigstore/cosign-installer@v4.0.0
       with:
-        cosign-release: 'v3.0.3'
+        cosign-release: 'v3.0.5'
     - name: Install Conan develop
       run: |
         pip install git+https://github.com/conan-io/conan.git@develop2
