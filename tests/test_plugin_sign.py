@@ -14,7 +14,6 @@ def conan_test_package_signing():
     conan_home = tempfile.mkdtemp(suffix='conans')
     old_env = dict(os.environ)
     env_vars = {"CONAN_HOME": conan_home,
-                "CONAN_SIGSTORE_DISABLE_REKOR": "1",
                 "COSIGN_PASSWORD": "fake-testing-pass"}
     os.environ.update(env_vars)
 
@@ -57,7 +56,7 @@ def conan_test_package_signing():
     try:
         yield
     finally:
-        run("conan remove * -c")
+        os.rmdir(conan_home)
         os.chdir(cwd)
         os.environ.clear()
         os.environ.update(old_env)
@@ -74,7 +73,7 @@ def test_cache_sign_verify(conan_test_package_signing):
     # sign it
     out = run("conan cache sign mypkg/1.0")
     assert "Generating signature file" in out
-    assert "Wrote signature to file" in out
+    assert "Wrote bundle to file" in out
 
     # The package is now signed
     out = run("conan cache verify mypkg/1.0")
@@ -89,7 +88,7 @@ def test_cache_sign_verify(conan_test_package_signing):
 
     # Sign package only
     out = run("conan cache sign mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:*")
-    assert "Wrote signature to file" in out
+    assert "Wrote bundle to file" in out
 
     # Test signing already signed package
     out = run("conan cache sign mypkg/1.0")
