@@ -3,13 +3,12 @@
 Plugin for signing Conan packages using the [Sigstore tools](https://www.sigstore.dev/).
 
 The goal of this plugin is to serve as a base example on how to implement a plugin for signing and verifying Conan
-packages, in this case, leveraging the tools provided by Sigstore such as Cosign and Rekor.
+packages, in this case, leveraging the tools provided by Sigstore with Cosign.
 
 **Feel free to clone this repo and modify the plugin with you own needs**.
 
 This plugin is implemented following the **package signing plugin interface**.
 Read more about it in the documentation: https://docs.conan.io/2/reference/extensions/package_signing.html
-
 
 ### Sigstore tools used by the plugin
 
@@ -29,7 +28,7 @@ To install this plugin, the easiest way is to use the ``conan config install`` c
 $ conan config install https://github.com/danimtb/conan_sigstore_plugin.git
 ```
 
-The plugin will be installed at ``<CONAN_HOME>/extensions/plugins/sign/sign.py``.
+The plugin will be installed at ``<CONAN_HOME>/extensions/plugins/sign/``.
 
 ## How to generate a keypair to sign packages
 
@@ -48,6 +47,8 @@ This will generate a ``mykey.key`` private key and a ``mykey.pub`` public key.
 Note that you may be prompted to introduce a password for your keypair that will be required in the sign process.
 **The password should be set as ``COSIGN_PASSWORD`` environment variable** for the plugin to signing the packages
 without intervention on interactive console.
+
+The path to these keys should be set in the plugin configuration file as explained in the next section.
 
 ## Configuration
 
@@ -143,6 +144,7 @@ The format of the `pkgsign-signatures.json` file is the following:
         "manifest": "pkgsign-manifest.json",
         "signature": "pkgsign-manifest.json.sig"
       }
+    }
   ]
 }
 ```
