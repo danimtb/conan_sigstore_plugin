@@ -1,6 +1,7 @@
 import tempfile
 import textwrap
 import os
+import shutil
 
 import pytest
 
@@ -56,7 +57,7 @@ def conan_test_package_signing():
     try:
         yield
     finally:
-        os.rmdir(conan_home)
+        shutil.rmtree(conan_home)
         os.chdir(cwd)
         os.environ.clear()
         os.environ.update(old_env)
