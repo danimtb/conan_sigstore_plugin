@@ -46,7 +46,7 @@ Public key written to mykey.pub
 This will generate a ``mykey.key`` private key and a ``mykey.pub`` public key.
 
 Note that you may be prompted to introduce a password for your keypair that will be required in the sign process.
-The password should be set as ``COSIGN_PASSWORD`` environment variable for the plugin to signing the packages
+**The password should be set as ``COSIGN_PASSWORD`` environment variable** for the plugin to signing the packages
 without intervention on interactive console.
 
 ## Configuration
@@ -95,14 +95,14 @@ verify:
 ```
 
 Each ``provider`` is set to be associated with a key.
-- In the case of signing, it should be associated to its public-private keypair (``private_key``, ``public_key``).
-- In the case of verifying, only the public key is required.
+- In the case of signing, it should be associated to its private key (``private_key``).
+- In the case of verifying, only the public key is required (``public_key``).
 
 ## How does the plugin work?
 
 When the packages are signed with ``conan cache sign``, they follow this process:
   1. The Conan-generated ``pkgsign-manifest.json`` file is signed using ``cosign`` in the ``verify()`` function.
-  2. The signature metadata is returned by the `sign()` method with the provider that signed the package, the method 
+  2. The signature metadata is returned by the ``sign()`` method with the provider that signed the package, the method 
      used (``sigstore``) and the artifacts that are part of the signature (the manifest and the signature file itself).
      The format of the returned metadata is the following:
      ```/
@@ -114,13 +114,14 @@ When the packages are signed with ``conan cache sign``, they follow this process
          "signature": "pkgsign-manifest.json.sig",
        }
      }]
-  3. If ``use_rekor`` is enabled in the configuration, the signature of the package is registered against the Rekor public log as well.
+  3. If ``use_rekor`` is enabled in the configuration, the signature of the package is registered against the Rekor 
+     public log as well.
 
-When the packages are downloaded from a remote (with ``conan install`` command or similar) or when they are verified with ``conan cache verify``,
-the packages are verified following this process:
+When the packages are downloaded from a remote (with ``conan install`` command or similar) or when they are verified
+with ``conan cache verify``, the packages are verified following this process:
 
-  1. Conan checks the checksums of the `pkgsign-manifest.json` file with the files in the package.
-  2. Then the signature file `pkgsign-signatures.json.sig` is verified using `cosign` and the public key
+  1. Conan checks the checksums of the `pkgsign-manifest.json`` file with the files in the package.
+  2. Then the signature file ``pkgsign-signatures.json.sig`` is verified using ``cosign`` and the public key
      associated to the provider defined in the signature metadata (as explained earlier).
   3. If ``use_rekor`` is enabled, the signature of the package is also verified against the Rekor public log.
 
@@ -152,7 +153,8 @@ Description of the contents:
 - **method**: Method use to sign the packages. This is useful to indicate different signing formats
   (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
   plugin. Currently, the only method implemented is `sigstore` (using `cosing` and `rekor` tools).
-- **sign_artifacts**: This is a dictionary with files that are part of the signature and that should be included in the package.
+- **sign_artifacts**: This is a dictionary with files that are part of the signature and that should be included in the
+  package.
 
 ## Environment Variables
 
