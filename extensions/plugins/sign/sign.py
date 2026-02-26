@@ -32,7 +32,7 @@ from conan.errors import ConanException
 
 COSIGN = "cosign"
 CONFIG_FILENAME = "sigstore-config.yaml"
-SIGSTORE_METHOD = "sigstore"
+SIGNING_METHOD = "sigstore"
 
 
 CONFIG_TEMPLATE_CONTENT = """
@@ -194,7 +194,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
             signatures = json.loads(f.read()).get("signatures")
         if signatures:
             already_signed = [s for s in signatures if
-                              s.get("provider") == provider and s.get("method") == SIGSTORE_METHOD]
+                              s.get("provider") == provider and s.get("method") == SIGNING_METHOD]
             if already_signed:
                 ConanOutput().warning(f"Package {ref.repr_notime()} is already signed")
                 return []  # Return empty list to avoid saving the signatures again
@@ -231,7 +231,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     ConanOutput().info(f"Created signature for file {manifest_filepath} at {bundle_filepath}")
     if use_rekor:
         ConanOutput().info(f"Uploaded signature {bundle_filepath} to Rekor")
-    return [{"method": SIGSTORE_METHOD,
+    return [{"method": SIGNING_METHOD,
              "provider": provider,
              "sign_artifacts": {"manifest": "pkgsign-manifest.json",
                                 "bundle": bunble_filename}}]
@@ -266,7 +266,7 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
 
         signature_method = signature.get("method")
         # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
-        if signature_method == SIGSTORE_METHOD:
+        if signature_method == SIGNING_METHOD:
             pubkey_filepath = _get_verify_key(ref, provider, config)
 
             use_rekor = _is_rekor_enabled(config.get("verify"))

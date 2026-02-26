@@ -104,7 +104,8 @@ Each ``provider`` is set to be associated with a key.
 When the packages are signed with ``conan cache sign``, they follow this process:
   1. The Conan-generated ``pkgsign-manifest.json`` file is signed using ``cosign`` in the ``verify()`` function.
   2. The signature metadata is returned by the ``sign()`` method with the provider that signed the package, the method 
-     used (``sigstore``) and the artifacts that are part of the signature (the manifest and the signature file itself).
+     used (``sigstore``) and the artifacts that are part of the signature (the manifest and the buindle file that contains
+    the signature itself).
      The format of the returned metadata is the following:
      ```/
      [{
@@ -112,7 +113,7 @@ When the packages are signed with ``conan cache sign``, they follow this process
        "method": "sigstore",
        "sign_artifacts": {
          "manifest": "pkgsign-manifest.json",
-         "signature": "pkgsign-manifest.json.sig",
+         "bundle": "artifact.sigstore.json",
        }
      }]
   3. If ``use_rekor`` is enabled in the configuration, the signature of the package is registered against the Rekor 
@@ -122,7 +123,7 @@ When the packages are downloaded from a remote (with ``conan install`` command o
 with ``conan cache verify``, the packages are verified following this process:
 
   1. Conan checks the checksums of the `pkgsign-manifest.json`` file with the files in the package.
-  2. Then the signature file ``pkgsign-signatures.json.sig`` is verified using ``cosign`` and the public key
+  2. Then the bundle file with the signature ``artifact.sigstore.json`` is verified using ``cosign`` and the public key
      associated to the provider defined in the signature metadata (as explained earlier).
   3. If ``use_rekor`` is enabled, the signature of the package is also verified against the Rekor public log.
 
@@ -142,7 +143,7 @@ The format of the `pkgsign-signatures.json` file is the following:
       "method": "sigstore",
       "sign_artifacts": {
         "manifest": "pkgsign-manifest.json",
-        "signature": "pkgsign-manifest.json.sig"
+        "bundle": "artifact.sigstore.json"
       }
     }
   ]
@@ -150,7 +151,7 @@ The format of the `pkgsign-signatures.json` file is the following:
 ```
 Description of the contents:
 
-- **provider**: Name of the angent that is signing the package. This is also used in the verification process to choose
+- **provider**: Name of the agent that is signing the package. This is also used in the verification process to choose
   the right keys to verify.
 - **method**: Method use to sign the packages. This is useful to indicate different signing formats
   (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
