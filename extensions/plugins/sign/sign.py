@@ -79,13 +79,15 @@ def _is_rekor_enabled(partial_config):
 
 
 def _is_sign_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN", True))
-    return env_var and config.get("sign", {}).get("enabled", True)
+    sign_enabled_env_var = os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN", "").strip().lower()
+    bool_value = sign_enabled_env_var in ("1", "true", "yes")
+    return bool_value if sign_enabled_env_var else config.get("sign", {}).get("enabled", True)
 
 
 def _is_verify_enabled(config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY", True))
-    return env_var and config.get("verify", {}).get("enabled", True)
+    verify_enabled_env_var = os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY", "").strip().lower()
+    bool_value = verify_enabled_env_var in ("1", "true", "yes")
+    return bool_value if verify_enabled_env_var else config.get("verify", {}).get("enabled", True)
 
 
 def _get_signing_config_path():
@@ -181,6 +183,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     config = _load_config()
     if not _is_sign_enabled(config):
         ConanOutput().highlight("Sign disabled")
+        return []
 
     if not _should_sign_reference(ref, config):
         ConanOutput().highlight("Reference does not match any configuration to be signed")
