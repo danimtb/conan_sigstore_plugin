@@ -36,9 +36,11 @@ SIGNING_METHOD = "sigstore"
 
 
 CONFIG_TEMPLATE_CONTENT = """
+# This is the configuration file for the Conan Sigstore plugin, which allows signing and verifying Conan packages.
+# You can uncomment and fill the sections below to configure the signing and verifying of your packages with Sigstore.
+#
 # Use this section to declare the name of the provider that signs the artifacts,
 # the references that apply to be signed, and the path to the private key.
-#
 # sign:
 #   enabled: true                       # (bool) Enable the signature of packages.
 #   use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
@@ -53,7 +55,6 @@ CONFIG_TEMPLATE_CONTENT = """
 
 
 # Use this section to verify the references for each provider using the corresponding public key.
-#
 # verify:
 #   enabled: true                         # (bool) Enable the verification signature of packages.
 #   use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
