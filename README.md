@@ -155,7 +155,7 @@ Description of the contents:
   the right keys to verify.
 - **method**: Method use to sign the packages. This is useful to indicate different signing formats
   (`openssl`, `gpg`, `minisign`, `signify`...) and to be able to support them for signing and verification inside the
-  plugin. Currently, the only method implemented is `sigstore` (using `cosing` and `rekor` tools).
+  plugin. Currently, the only method implemented is `sigstore` (using `cosing`).
 - **sign_artifacts**: This is a dictionary with files that are part of the signature and that should be included in the
   package.
 
@@ -164,4 +164,4 @@ Description of the contents:
 - ``COSIGN_PASSWORD``: Set the password of your private key. This is used when using the private key to sign packages.
 - ``CONAN_SIGN_PLUGIN_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
 - ``CONAN_SIGN_PLUGIN_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
-- ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable sign and verify using the Rekor CLI and rekor log (disabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable Rekor to register the signature and verifying it using its public transparency log (disabled by default).

@@ -58,7 +58,7 @@ def env_set(env_vars: dict):
                 os.environ[key] = original_value
 
 
-def test_config_enabled(conan_test_package_signing):
+def test_config_sign_verify_enabled(conan_test_package_signing):
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
     config = {"sign": {"enabled": True, "provider": "kk"}, "verify": {"enabled": True}}
@@ -76,7 +76,7 @@ def test_config_enabled(conan_test_package_signing):
         assert "Verify disabled" in out
 
 
-def test_config_disabled(conan_test_package_signing):
+def test_config_sign_verify_disabled(conan_test_package_signing):
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
     config = {"sign": {"enabled": False, "provider": "kk"}, "verify": {"enabled": False}}

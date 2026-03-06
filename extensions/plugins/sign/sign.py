@@ -75,8 +75,9 @@ CONFIG_TEMPLATE_CONTENT = """
 
 
 def _is_rekor_enabled(partial_config):
-    env_var = bool(os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR", False))
-    return env_var or partial_config.get("use_rekor", False)
+    rekor_enabled_env_var = os.getenv("CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR", "").strip().lower()
+    bool_value = rekor_enabled_env_var in ("1", "true", "yes")
+    return bool_value if rekor_enabled_env_var else partial_config.get("use_rekor", False)
 
 
 def _is_sign_enabled(config):
