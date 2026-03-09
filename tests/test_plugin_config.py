@@ -125,7 +125,7 @@ def test_cosign_command(conan_test_package_signing):
     assert len(commands) == 2
     # Assert command lines have the expected cosign command with the expected arguments
     for command in commands:
-        assert command.startswith("cosign3 -d sign-blob")
+        assert command.startswith("cosign -d sign-blob")
         for flag in ["--key", "--bundle", "--signing-config"]:
             assert flag in command
 
@@ -136,6 +136,6 @@ def test_cosign_command(conan_test_package_signing):
     assert len(commands) == 2
     # Assert command lines have the expected cosign command with the expected arguments
     for command in commands:
-        assert command.startswith("cosign3 -d verify-blob")
+        assert command.startswith("cosign -d verify-blob")
         for flag in ["--key", "--bundle", "--private-infrastructure=true"]:
             assert flag in command
