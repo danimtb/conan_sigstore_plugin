@@ -16,6 +16,9 @@ Read more about it in the documentation: https://docs.conan.io/2/reference/exten
   with storage in an Open Container Initiative (OCI) registry, making signatures and in-toto/SLSA attestations invisible
   infrastructure.
 
+- **[Rekor](https://docs.sigstore.dev/logging/overview/):** For storing the signatures in a public transparency log,
+  providing an additional layer of security and trust. This plugin uses the public Rekor server to register the signatures https://rekor.sigstore.dev/
+
 The following executables should be installed and in the PATH of your system.
 
 - ``cosign (>3.0.0)``: https://github.com/sigstore/cosign/releases
@@ -58,46 +61,57 @@ at ``<CONAN_HOME>/extensions/plugins/sign/sigstore-config.yaml``.
 If the plugin runs for the first time and the configuration file does not exist, it will create a template
 file for easier customization.
 
-```yaml
-# Use this section to declare the name of the provider that signs the artifacts,
-# the references that apply to be signed, and the path to the private key.
+**Important:** Modify this configuration file to **set the name of the provider and the path to the keys** generated in the
+previous step.
 
+```yaml
+# Use this section to declare the name of the provider that signs the artifacts and the path to the private key.
 sign:
   enabled: true                       # (bool) Enable the signature of packages.
-  use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
   provider: "mycompany"               # (string) Name of the provider used to sign the packages.
-  private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
-  references:                         # (list) References or pattern of references that should be signed.
-    - "*/*"                           # Includes all packages with name/version format.
-    - "*/*@*/*"                       # Includes all packages with name/version@user format.
-    - "*/*@*/*"                       # Includes all packages with name/version@user/channel format.
-  exclude_references:                 # (list) References or pattern of references that should NOT be signed.
-    - "**/**@other_company"           # Excludes packages from "other_company".
+  private_key: "path/to/privkey.key"  # (absolute path) Private key to sign the packages with.
+  use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
 
 
-# Use this section to verify the references for each provider using the corresponding public key.
-
+# Use this section to verify the packages with the corresponding public keys of for each provider (multiple providers supported).
 verify:
   enabled: true                         # (bool) Enable the verification signature of packages.
-  use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
   providers:                            # (list) Providers that sign the packages for verification.
-    conancenter:                        # Name of the provider that signed the packages
-      public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
-      references:                       # (list) References or pattern that should be verified.
-        - "*/*"                         # Includes all packages with name/version format.
-      exclude_references:               # (list) References or pattern that should NOT be verified.
-        - "zlib/1.2.11"
-    mycompany:
-      public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
-      references:
-        - "*/*@mycomany/**"             # Verify all the references for mycompany user.
-      exclude_references:
-        - "*/*@mycompany/testing"       # Exclude verification of references that have testing channel.
+    mycompany:                          # Name of the provider that signed the packages
+      public_key: "path/to/pubkey.pub"  # (absolute path) Public key to verify the packages with.
+  use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
 ```
 
 Each ``provider`` is set to be associated with a key.
 - In the case of signing, it should be associated to its private key (``private_key``).
 - In the case of verifying, only the public key is required (``public_key``).
+
+## Environment Variables
+
+The environment variables take precedence over the configuration file, so you can set them in your system.
+The following environment variables are supported:
+
+- ``COSIGN_PASSWORD``: [Mandatory] Set the password of your private key. This is used to sign packages with the private key.
+- ``CONAN_SIGN_PLUGIN_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
+- ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable Rekor to register the signature and verifying it using its public transparency log (disabled by default).
+
+## Sign and verify packages
+
+To sign the packages, use the command:
+
+```bash
+$ conan cache sign mypkg/1.0
+```
+
+To verify the packages, use the command:
+
+```bash
+$ conan cache verify mypkg/1.0
+```
+
+When the packages are downloaded from a remote, they will be automatically verified as well. This wil be typically done
+when using the ``conan install`` command or similar.
 
 ## How does the plugin work?
 
@@ -158,10 +172,3 @@ Description of the contents:
   plugin. Currently, the only method implemented is `sigstore` (using `cosing`).
 - **sign_artifacts**: This is a dictionary with files that are part of the signature and that should be included in the
   package.
-
-## Environment Variables
-
-- ``COSIGN_PASSWORD``: Set the password of your private key. This is used when using the private key to sign packages.
-- ``CONAN_SIGN_PLUGIN_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
-- ``CONAN_SIGN_PLUGIN_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
-- ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable Rekor to register the signature and verifying it using its public transparency log (disabled by default).

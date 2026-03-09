@@ -19,7 +19,6 @@ Environment variables:
 """
 
 import json
-import re
 import os
 import subprocess
 
@@ -130,6 +129,17 @@ def _run_command(command):
         )
 
 
+def _print_bundle_content(path, with_rekor_url):
+    with open(path, "r") as f:
+        content = json.load(f)
+    out = ConanOutput()
+    out.title("artifact.sigstore.json bundle content")
+    out.info(json.dumps(content, indent=2))
+    if with_rekor_url:
+        logIndex = content.get("verificationMaterial").get("tlogEntries")[0].get("logIndex")
+        out.info(f"Rekor signature entry URL: https://rekor.sigstore.dev/api/v1/log/entries?logIndex={logIndex}")
+
+
 def sign(ref, artifacts_folder, signature_folder, **kwargs):
     config = _load_config()
     if not _is_sign_enabled(config):
@@ -182,6 +192,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     ConanOutput().info(f"Created signature for file {manifest_filepath} at {bundle_filepath}")
     if use_rekor:
         ConanOutput().info(f"Uploaded signature {bundle_filepath} to Rekor")
+    _print_bundle_content(bundle_filepath, use_rekor)
     return [{"method": SIGNING_METHOD,
              "provider": provider,
              "sign_artifacts": {"manifest": "pkgsign-manifest.json",
@@ -228,7 +239,7 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
                 manifest_filepath
             ]
             if not use_rekor:
-                cosign_verify_cmd.append(f"--private-infrastructure=true")
+                cosign_verify_cmd.append("--private-infrastructure=true")
             try:
                 _run_command(cosign_verify_cmd)
             except Exception as exc:
@@ -236,5 +247,6 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
             ConanOutput().info(f"Signature correctly verified with cosign")
             if use_rekor:
                 ConanOutput().info(f"Signature {bundle_filepath} for {manifest_filepath} verified against Rekor!")
+            _print_bundle_content(bundle_filepath, use_rekor)
         else:
             raise ConanException(f"Signature method {signature_method} not supported!")

@@ -32,8 +32,9 @@ def conan_test_package_signing():
     replace_in_file(plugin_path, "def _run_command(command):",
                     textwrap.dedent("""\
                             def _run_command(command):
-                                print(" ".join(command))
+                                print("Command:", " ".join(command))
                                 return"""))
+    replace_in_file(plugin_path, "_print_bundle_content(bundle_filepath, use_rekor)", "")
 
     # Prepare test files
     current = tempfile.mkdtemp(suffix="conans")
@@ -99,13 +100,42 @@ def test_config_rekor_enabled(conan_test_package_signing):
                          "providers": {"myprovider": {"public_key": os.path.join(base_path, "mykey.pub")}},
                          "use_rekor": True}}
     yaml.dump(config, open(config_path, "w"))
-    plugin_path = os.path.join(base_path, "sign.py")
-    replace_in_file(plugin_path, "def _run_command(command):",
-                    textwrap.dedent("""\
-                        def _run_command(command):
-                            print(command)
-                            return"""))
     out = run("conan cache sign mypkg/1.0")
     assert "--signing-config" not in out
     out = run("conan cache verify mypkg/1.0")
     assert "--private-infrastructure=true" not in out
+
+
+def test_cosign_command(conan_test_package_signing):
+    """
+    Test verifying package with cosign CLI command
+    """
+    base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
+    config_path = os.path.join(base_path, "sigstore-config.yaml")
+    config = {"sign": {"enabled": True, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key"),
+                       "use_rekor": False},
+              "verify": {"enabled": True,
+                         "providers": {"myprovider": {"public_key": os.path.join(base_path, "mykey.pub")}},
+                         "use_rekor": False}}
+    yaml.dump(config, open(config_path, "w"))
+    # sign it
+    out = run("conan cache sign mypkg/1.0")
+    # Find lines that start with "Command:" and extract the command
+    commands = [line[len("Command: "):] for line in out.splitlines() if line.startswith("Command: ")]
+    assert len(commands) == 2
+    # Assert command lines have the expected cosign command with the expected arguments
+    for command in commands:
+        assert command.startswith("cosign3 -d sign-blob")
+        for flag in ["--key", "--bundle", "--signing-config"]:
+            assert flag in command
+
+    # verify it
+    out = run("conan cache verify mypkg/1.0")
+    # Find lines that start with "Command:" and extract the command
+    commands = [line[len("Command: "):] for line in out.splitlines() if line.startswith("Command: ")]
+    assert len(commands) == 2
+    # Assert command lines have the expected cosign command with the expected arguments
+    for command in commands:
+        assert command.startswith("cosign3 -d verify-blob")
+        for flag in ["--key", "--bundle", "--private-infrastructure=true"]:
+            assert flag in command

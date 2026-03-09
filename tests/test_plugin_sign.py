@@ -5,7 +5,7 @@ import shutil
 
 import pytest
 
-from tests.tools import run, save
+from tests.tools import run, save, env_set
 
 
 @pytest.fixture
@@ -37,8 +37,6 @@ def conan_test_package_signing():
         verify:
           providers:
             conan:
-              references:
-                - "*/*"
               public_key: "{conan_sigstore_pubkey}"
     """))
 
@@ -91,3 +89,16 @@ def test_cache_sign_verify(conan_test_package_signing):
     out = run("conan cache sign mypkg/1.0")
     assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2 is already signed" in out
     assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709#4a12a155a57785a80d517f75dafee98e is already signed" in out
+
+
+def test_using_rekor(conan_test_package_signing):
+    """
+    Test that the signature is registered when using Rekor transparency log, and that the tlog entries are retrieved when verifying the package
+    """
+    with env_set({"CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR": "true"}):
+        for command in ["conan cache sign mypkg/1.0", "conan cache verify mypkg/1.0"]:
+            out = run(command)
+            assert "tlogEntries" in out
+            assert "logIndex" in out
+            assert "inclusionProof" in out
+            assert "rekor.sigstore.dev" in out
