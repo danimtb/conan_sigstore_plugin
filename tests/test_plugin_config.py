@@ -2,12 +2,11 @@ import tempfile
 import textwrap
 import os
 import shutil
-from contextlib import contextmanager
 
 import pytest
 import yaml
 
-from tools import run
+from tests.tools import env_set, load, replace_in_file, run, save
 
 
 @pytest.fixture
@@ -15,12 +14,26 @@ def conan_test_package_signing():
     # Prepare environment vars
     conan_home = tempfile.mkdtemp(suffix='conans')
     old_env = dict(os.environ)
-    env_vars = {"CONAN_HOME": conan_home}
+    env_vars = {"CONAN_HOME": conan_home,
+                "COSIGN_PASSWORD": "fake-testing-pass"}
     os.environ.update(env_vars)
 
     # Install plugin
     repo = os.path.join(os.path.dirname(__file__), "..")
     run(f"conan config install {repo}")
+
+    # Create dummy keys
+    base_path = os.path.join(conan_home, "extensions", "plugins", "sign")
+    save(os.path.join(base_path, "mykey.key"), "")
+    save(os.path.join(base_path, "mykey.pub"), "")
+
+    # Patch the plugin to avoid actually running any signing command, just print it instead
+    plugin_path = os.path.join(base_path, "sign.py")
+    replace_in_file(plugin_path, "def _run_command(command):",
+                    textwrap.dedent("""\
+                            def _run_command(command):
+                                print(" ".join(command))
+                                return"""))
 
     # Prepare test files
     current = tempfile.mkdtemp(suffix="conans")
@@ -39,56 +52,60 @@ def conan_test_package_signing():
         os.environ.update(old_env)
 
 
-@contextmanager
-def env_set(env_vars: dict):
-    """
-    Temporarily sets environment variables from a dictionary.
-    Restores the original environment upon exit.
-    """
-    old_env = {k: os.environ.get(k) for k in env_vars}
-
-    try:
-        os.environ.update(env_vars)
-        yield
-    finally:
-        for key, original_value in old_env.items():
-            if original_value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = original_value
-
-
 def test_config_sign_verify_enabled(conan_test_package_signing):
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
-    config = {"sign": {"enabled": True, "provider": "kk"}, "verify": {"enabled": True}}
+    config = {"sign": {"enabled": True, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key")},
+              "verify": {"enabled": True, "providers": {"myprovider": {"public_key": os.path.join(base_path, "mykey.pub")}}}}
     yaml.dump(config, open(config_path, "w"))
     out = run("conan cache sign mypkg/1.0")
-    assert "Sign disabled" not in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
     out = run("conan cache verify mypkg/1.0")
-    assert "Verify disabled" not in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
     with env_set({"CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN": "0",
                   "CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY": "0"}):
-        out = run("conan cache sign mypkg/1.0")
-        assert "Sign disabled" in out
-        out = run("conan cache verify mypkg/1.0")
-        assert "Verify disabled" in out
+        out = run("conan cache sign mypkg/1.0", error=True)
+        assert "Package signing plugin is disabled" in out
+        out = run("conan cache verify mypkg/1.0", error=True)
+        assert "Package signing plugin is disabled" in out
 
 
 def test_config_sign_verify_disabled(conan_test_package_signing):
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
-    config = {"sign": {"enabled": False, "provider": "kk"}, "verify": {"enabled": False}}
+    config = {"sign": {"enabled": False, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key")},
+              "verify": {"enabled": False,
+                         "providers": {"myprovider": {"public_key": os.path.join(base_path, "mykey.pub")}}}}
     yaml.dump(config, open(config_path, "w"))
-    out = run("conan cache sign mypkg/1.0")
-    assert "Sign disabled" in out
-    out = run("conan cache verify mypkg/1.0")
-    assert "Verify disabled" in out
+    out = run("conan cache sign mypkg/1.0", error=True)
+    assert "Package signing plugin is disabled" in out
+    out = run("conan cache verify mypkg/1.0", error=True)
+    assert "Package signing plugin is disabled" in out
 
     with env_set({"CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN": "1",
                   "CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY": "1"}):
         out = run("conan cache sign mypkg/1.0")
-        assert "Sign disabled" not in out
+        assert "[Package sign] Summary: OK=2, FAILED=0" in out
         out = run("conan cache verify mypkg/1.0")
-        assert "Verify disabled" not in out
+        assert "[Package sign] Summary: OK=2, FAILED=0" in out
+
+
+def test_config_rekor_enabled(conan_test_package_signing):
+    base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
+    config_path = os.path.join(base_path, "sigstore-config.yaml")
+    config = {"sign": {"enabled": True, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key"), "use_rekor": True},
+              "verify": {"enabled": True,
+                         "providers": {"myprovider": {"public_key": os.path.join(base_path, "mykey.pub")}},
+                         "use_rekor": True}}
+    yaml.dump(config, open(config_path, "w"))
+    plugin_path = os.path.join(base_path, "sign.py")
+    replace_in_file(plugin_path, "def _run_command(command):",
+                    textwrap.dedent("""\
+                        def _run_command(command):
+                            print(command)
+                            return"""))
+    out = run("conan cache sign mypkg/1.0")
+    assert "--signing-config" not in out
+    out = run("conan cache verify mypkg/1.0")
+    assert "--private-infrastructure=true" not in out

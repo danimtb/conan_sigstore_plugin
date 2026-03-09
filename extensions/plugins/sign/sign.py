@@ -30,47 +30,31 @@ from conan.api.output import ConanOutput
 from conan.errors import ConanException
 
 
-COSIGN = "cosign"
+COSIGN = "cosign3"
 CONFIG_FILENAME = "sigstore-config.yaml"
 SIGNING_METHOD = "sigstore"
 
 
 CONFIG_TEMPLATE_CONTENT = """
-# This is the configuration file for the Conan Sigstore plugin, which allows signing and verifying Conan packages.
-# You can uncomment and fill the sections below to configure the signing and verifying of your packages with Sigstore.
+# This is the configuration file for the Conan Sigstore plugin, which allows signing and verifying Conan packages with
+# Sigstore's Cosign tool.
+# You can fill the sections below to configure the signing and verifying of your packages.
 #
-# Use this section to declare the name of the provider that signs the artifacts,
-# the references that apply to be signed, and the path to the private key.
-# sign:
-#   enabled: true                       # (bool) Enable the signature of packages.
-#   use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
-#   provider: "mycompany"               # (string) Name of the provider used to sign the packages.
-#   private_key: "path/to/privkey.pem"  # (absolute path) Private key to sign the packages with.
-#   references:                         # (list) References or pattern of references that should be signed.
-#     - "*/*"                           # Includes all packages with name/version format.
-#     - "*/*@*/*"                       # Includes all packages with name/version@user format.
-#     - "*/*@*/*"                       # Includes all packages with name/version@user/channel format.
-#   exclude_references:                 # (list) References or pattern of references that should NOT be signed.
-#     - "**/**@other_company"           # Excludes packages from "other_company".
+# Use this section to declare the name of the provider that signs the artifacts and the path to the private key.
+sign:
+  enabled: true                       # (bool) Enable the signature of packages.
+  provider: "mycompany"               # (string) Name of the provider used to sign the packages.
+  private_key: "path/to/privkey.key"  # (absolute path) Private key to sign the packages with.
+  use_rekor: false                    # (bool) Enable uploading the signature to the Rekor log.
 
 
-# Use this section to verify the references for each provider using the corresponding public key.
-# verify:
-#   enabled: true                         # (bool) Enable the verification signature of packages.
-#   use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
-#   providers:                            # (list) Providers that sign the packages for verification.
-#     conancenter:                        # Name of the provider that signed the packages
-#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
-#       references:                       # (list) References or pattern that should be verified.
-#         - "*/*"                         # Includes all packages with name/version format.
-#       exclude_references:               # (list) References or pattern that should NOT be verified.
-#         - "zlib/1.2.11"
-#     mycompany:
-#       public_key: "path/to/pubkey.pem"  # (absolute path) Public key to verify the packages with.
-#       references:
-#         - "*/*@mycomany/**"             # Verify all the references for mycompany user.
-#       exclude_references:
-#         - "*/*@mycompany/testing"       # Exclude verification of references that have testing channel.
+# Use this section to verify the packages with the corresponding public keys of for each provider (multiple providers supported).
+verify:
+  enabled: true                         # (bool) Enable the verification signature of packages.
+  providers:                            # (list) Providers that sign the packages for verification.
+    mycompany:                          # Name of the provider that signed the packages
+      public_key: "path/to/pubkey.pub"  # (absolute path) Public key to verify the packages with.
+  use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
 """
 
 
@@ -108,35 +92,15 @@ def _load_config():
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
     if config.get("sign"):
-        assert config.get("sign").get("provider") is not None, f"Missing 'sign.provider' field in {config_path}"
+        assert config.get("sign").get("provider") not in (None, "mycompany"), \
+            f"Missing 'sign.provider' field in {config_path}. Set your own provider name in the configuration file."
+    if config.get("verify"):
+        providers = config.get("verify").get("providers")
+        assert providers, (f"Missing 'verify.providers' field in {config_path}. Set one provider to verify the "
+                           f"packages' signature in the configuration file.")
+        assert "mycompany" not in providers, \
+            f"'mycompany' provider found in 'verify.providers'. Set your own provider name in the configuration file."
     return config
-
-
-def _reference_fnmatch(reference, pattern):
-    if pattern.count('/') != reference.count('/') or pattern.count('@') != reference.count('@'):
-        return False
-    regex_pattern = re.escape(pattern)
-    regex_pattern = regex_pattern.replace(r'\*', r'[^/@]+')
-    return bool(re.fullmatch(regex_pattern, reference))
-
-
-def _format_reference(reference):
-    if isinstance(reference, PkgReference):
-        reference = reference.ref
-    return str(reference)
-
-
-def _should_sign_reference(ref, config):
-    reference = _format_reference(ref)
-    sign_config = config.get("sign", [])
-    if sign_config:
-        for rule in sign_config.get("exclude_references", []):
-            if _reference_fnmatch(reference, rule):
-                return False
-        for rule in sign_config.get("references", []):
-            if _reference_fnmatch(reference, rule):
-                return True
-    return False
 
 
 def _get_sign_key(config):
@@ -144,21 +108,6 @@ def _get_sign_key(config):
     privkey_path = sign_config.get("private_key")
     assert os.path.isfile(privkey_path), f"Private key path not found at '{privkey_path}'"
     return privkey_path
-
-
-def _should_verify_reference(ref, provider, config):
-    reference = _format_reference(ref)
-    verify_config = config.get("verify")
-    if verify_config:
-        provider_config = verify_config.get("providers", {}).get(provider)
-        if provider_config:
-            for rule in provider_config.get("exclude_references", []):
-                if _reference_fnmatch(reference, rule):
-                    return False
-            for rule in provider_config.get("references", []):
-                if _reference_fnmatch(reference, rule):
-                    return True
-    return False
 
 
 def _get_verify_key(reference, provider, config):
@@ -184,12 +133,9 @@ def _run_command(command):
 def sign(ref, artifacts_folder, signature_folder, **kwargs):
     config = _load_config()
     if not _is_sign_enabled(config):
-        ConanOutput().highlight("Sign disabled")
-        return []
-
-    if not _should_sign_reference(ref, config):
-        ConanOutput().highlight("Reference does not match any configuration to be signed")
-        return []
+        raise ConanException("Package signing plugin is disabled for signing packages. To enable it, set 'sign.enabled'"
+                             " to true in the plugin configuration file or set the CONAN_SIGSTORE_PLUGIN_ENABLE_SIGN "
+                             "environment variable to true.")
 
     # Check if package is already signed (pkgsign-signatures.json should exist and have the same signature metadata)
     provider = config.get("sign").get("provider")
@@ -219,7 +165,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
 
     use_rekor = _is_rekor_enabled(config.get("sign"))
     cosign_sign_cmd = [
-        COSIGN,
+        COSIGN, "-d",
         "sign-blob",
         "--key", privkey_filepath,
         "--bundle", bundle_filepath,
@@ -245,8 +191,9 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
 def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
     config = _load_config()
     if not _is_verify_enabled(config):
-        ConanOutput().highlight("Verify disabled")
-        return
+        raise ConanException("Package signing plugin is disabled for verifying packages. To enable it, set "
+                             "'verify.enabled' to true in the plugin configuration file or set the "
+                             "CONAN_SIGSTORE_PLUGIN_ENABLE_VERIFY environment variable to true.")
 
     signatures_path = os.path.join(signature_folder, "pkgsign-signatures.json")
     try:
@@ -262,10 +209,6 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
     for signature in signatures:
         provider = signature.get("provider")
 
-        if not _should_verify_reference(ref, provider, config):
-            ConanOutput().highlight("Reference does not match any configuration to be verified")
-            return
-
         manifest_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("manifest"))
         bundle_filepath = os.path.join(signature_folder, signature.get("sign_artifacts").get("bundle"))
 
@@ -278,7 +221,7 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
 
             # Verify sha file
             cosign_verify_cmd = [
-                COSIGN,
+                COSIGN, "-d",
                 "verify-blob",
                 "--key", pubkey_filepath,
                 "--bundle", bundle_filepath,
