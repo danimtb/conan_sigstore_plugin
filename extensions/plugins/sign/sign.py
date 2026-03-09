@@ -29,7 +29,7 @@ from conan.api.output import ConanOutput
 from conan.errors import ConanException
 
 
-COSIGN = "cosign3"
+COSIGN = "cosign"
 CONFIG_FILENAME = "sigstore-config.yaml"
 SIGNING_METHOD = "sigstore"
 
