@@ -6,7 +6,7 @@ import shutil
 import pytest
 import yaml
 
-from tests.tools import env_set, load, replace_in_file, run, save
+from tests.tools import env_set, replace_in_file, run, save
 
 
 @pytest.fixture
