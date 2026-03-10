@@ -76,8 +76,8 @@ def _is_verify_enabled(config):
 
 
 def _get_signing_config_path():
-    # The content of this file was generated with: cosign signing-config create --with-default-services=false --out=signing-config.json
-    # This config file is needed to disable rekor (enabled by default)
+    # The content of file generated with: cosign signing-config create --with-default-services=false --out=signing-config.json
+    # This config file is needed to disable rekor (enabled by default in the cosign CLI)
     return os.path.join(os.path.dirname(__file__), "signing-config.json")
 
 
@@ -129,15 +129,11 @@ def _run_command(command):
         )
 
 
-def _print_bundle_content(path, with_rekor_url):
-    with open(path, "r") as f:
+def _print_rekor_url(bundle_path):
+    with open(bundle_path, "r") as f:
         content = json.load(f)
-    out = ConanOutput()
-    out.title("artifact.sigstore.json bundle content")
-    out.info(json.dumps(content, indent=2))
-    if with_rekor_url:
-        logIndex = content.get("verificationMaterial").get("tlogEntries")[0].get("logIndex")
-        out.info(f"Rekor signature entry URL: https://rekor.sigstore.dev/api/v1/log/entries?logIndex={logIndex}")
+    logIndex = content.get("verificationMaterial").get("tlogEntries")[0].get("logIndex")
+    ConanOutput().info(f"Rekor transparency log URL: https://rekor.sigstore.dev/api/v1/log/entries?logIndex={logIndex}")
 
 
 def sign(ref, artifacts_folder, signature_folder, **kwargs):
@@ -170,8 +166,7 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
         raise ConanException(f"COSIGN_PASSWORD environment variable not set."
                              f"\nIt is required to sign the packages with the private key ({privkey_filepath}).")
 
-    ConanOutput().info(f"Generating signature file at {bundle_filepath} from manifest file {manifest_filepath} "
-                       f"using private key {privkey_filepath}")
+    ConanOutput().info(f"Signing package with '{provider}' provider using private key at {privkey_filepath}")
 
     use_rekor = _is_rekor_enabled(config.get("sign"))
     cosign_sign_cmd = [
@@ -189,10 +184,8 @@ def sign(ref, artifacts_folder, signature_folder, **kwargs):
     except Exception as exc:
         raise ConanException(f"Error signing artifact {manifest_filepath}: {exc}")
 
-    ConanOutput().info(f"Created signature for file {manifest_filepath} at {bundle_filepath}")
     if use_rekor:
-        ConanOutput().info(f"Uploaded signature {bundle_filepath} to Rekor")
-    _print_bundle_content(bundle_filepath, use_rekor)
+        _print_rekor_url(bundle_filepath)
     return [{"method": SIGNING_METHOD,
              "provider": provider,
              "sign_artifacts": {"manifest": "pkgsign-manifest.json",
@@ -211,11 +204,11 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
         with open(signatures_path, "r", encoding="utf-8") as f:
             signatures = json.loads(f.read()).get("signatures")
     except Exception:
-        ConanOutput().warning("Could not verify unsigned package")
-        return
+        raise ConanException("Could not verify unsigned package")
 
     if not signatures:
-        ConanOutput().warning("No signatures found in 'pkgsign-signatures.json' file. Could not verify package")
+        raise ConanException(f"No signatures found in {signatures_path} file. "
+                             f"Could not verify package {ref.repr_notime()}")
 
     for signature in signatures:
         provider = signature.get("provider")
@@ -227,7 +220,7 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
         # Support different signing implementations (sigstore, openssl, gpg...) to verify the packages
         if signature_method == SIGNING_METHOD:
             pubkey_filepath = _get_verify_key(ref, provider, config)
-
+            ConanOutput().info(f"Verifying package with '{provider}' provider using public key at {pubkey_filepath}")
             use_rekor = _is_rekor_enabled(config.get("verify"))
 
             # Verify sha file
@@ -244,9 +237,7 @@ def verify(ref, artifacts_folder, signature_folder, files, **kwargs):
                 _run_command(cosign_verify_cmd)
             except Exception as exc:
                 raise ConanException(f"Error verifying artifact {manifest_filepath}: {exc}")
-            ConanOutput().info(f"Signature correctly verified with cosign")
             if use_rekor:
-                ConanOutput().info(f"Signature {bundle_filepath} for {manifest_filepath} verified against Rekor!")
-            _print_bundle_content(bundle_filepath, use_rekor)
+                _print_rekor_url(bundle_filepath)
         else:
             raise ConanException(f"Signature method {signature_method} not supported!")

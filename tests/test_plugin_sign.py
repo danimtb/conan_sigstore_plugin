@@ -59,46 +59,47 @@ def conan_test_package_signing():
 
 def test_cache_sign_verify(conan_test_package_signing):
     """
-    Test verifying package with conan cache commands
+    Test the conan cache sign and verify flow with the expected behavior
     """
-    out = run("conan cache verify mypkg/1.0")
+    out = run("conan cache verify mypkg/1.0", error=True)
     # The package is still not signed
-    assert "WARN: Could not verify unsigned package" in out
+    assert "ERROR: Could not verify unsigned package" in out
+    assert "[Package sign] Summary: OK=0, FAILED=2" in out
 
     # sign it
     out = run("conan cache sign mypkg/1.0")
-    assert "Generating signature file" in out
     assert "Wrote bundle to file" in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
     # The package is now signed
     out = run("conan cache verify mypkg/1.0")
-    assert "Signature correctly verified with cosign" in out
+    assert "Verified OK" in out
     assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
     # Rebuild the package, which will create a new package revision, but it will not be signed
     run("conan install --requires mypkg/1.0 --build mypkg/1.0")
-    out = run("conan cache verify mypkg/1.0")
-    assert "Signature correctly verified with cosign" in out
-    assert "WARN: Could not verify unsigned package" in out
+    out = run("conan cache verify mypkg/1.0", error=True)
+    assert "Verified OK" in out
+    assert "ERROR: Could not verify unsigned package" in out
+    assert "[Package sign] Summary: OK=1, FAILED=1" in out
 
     # Sign package only
     out = run("conan cache sign mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:*")
     assert "Wrote bundle to file" in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
     # Test signing already signed package
     out = run("conan cache sign mypkg/1.0")
     assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2 is already signed" in out
     assert "WARN: Package mypkg/1.0#3db0ffbad94d82b8b7a4cbbb77539bb2:da39a3ee5e6b4b0d3255bfef95601890afd80709#4a12a155a57785a80d517f75dafee98e is already signed" in out
+    assert "[Package sign] Summary: OK=2, FAILED=0" in out
 
 
 def test_using_rekor(conan_test_package_signing):
     """
-    Test that the signature is registered when using Rekor transparency log, and that the tlog entries are retrieved when verifying the package
+    Test that the signature is registered when using Rekor transparency log
     """
     with env_set({"CONAN_SIGSTORE_PLUGIN_ENABLE_REKOR": "true"}):
         for command in ["conan cache sign mypkg/1.0", "conan cache verify mypkg/1.0"]:
             out = run(command)
-            assert "tlogEntries" in out
-            assert "logIndex" in out
-            assert "inclusionProof" in out
-            assert "rekor.sigstore.dev" in out
+            assert "Rekor transparency log URL: https://rekor.sigstore.dev" in out

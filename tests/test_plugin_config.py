@@ -34,7 +34,7 @@ def conan_test_package_signing():
                             def _run_command(command):
                                 print("Command:", " ".join(command))
                                 return"""))
-    replace_in_file(plugin_path, "_print_bundle_content(bundle_filepath, use_rekor)", "")
+    replace_in_file(plugin_path, "_print_rekor_url(bundle_filepath)", "pass")
 
     # Prepare test files
     current = tempfile.mkdtemp(suffix="conans")
@@ -54,6 +54,10 @@ def conan_test_package_signing():
 
 
 def test_config_sign_verify_enabled(conan_test_package_signing):
+    """
+    Test that the plugin is correctly enabled when the config options are set to enable it.
+    Also that env vars take precedence over config options.
+    """
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
     config = {"sign": {"enabled": True, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key")},
@@ -73,6 +77,10 @@ def test_config_sign_verify_enabled(conan_test_package_signing):
 
 
 def test_config_sign_verify_disabled(conan_test_package_signing):
+    """
+    Test that the plugin is correctly disabled when the config options are set to disable it.
+    Also that env vars take precedence over config options.
+    """
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
     config = {"sign": {"enabled": False, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key")},
@@ -93,6 +101,9 @@ def test_config_sign_verify_disabled(conan_test_package_signing):
 
 
 def test_config_rekor_enabled(conan_test_package_signing):
+    """
+    Test that the config options for rekor are correctly passed to the cosign command according to the plugin configuration
+    """
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
     config = {"sign": {"enabled": True, "provider": "myprovider", "private_key": os.path.join(base_path, "mykey.key"), "use_rekor": True},
@@ -108,7 +119,7 @@ def test_config_rekor_enabled(conan_test_package_signing):
 
 def test_cosign_command(conan_test_package_signing):
     """
-    Test verifying package with cosign CLI command
+    Test that the cosign command is called with the expected arguments according to the plugin configuration
     """
     base_path = os.path.join(conan_test_package_signing["conan_home"], "extensions", "plugins", "sign")
     config_path = os.path.join(base_path, "sigstore-config.yaml")
