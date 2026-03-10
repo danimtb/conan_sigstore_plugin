@@ -51,7 +51,7 @@ sign:
 verify:
   enabled: true                         # (bool) Enable the verification signature of packages.
   providers:                            # (list) Providers that sign the packages for verification.
-    mycompany:                          # Name of the provider that signed the packages
+    mycompany:                          # (string) Name of the provider that signed the packages
       public_key: "path/to/pubkey.pub"  # (absolute path) Public key to verify the packages with.
   use_rekor: false                      # (bool) Enable verifying the signature against the Rekor log.
 """
