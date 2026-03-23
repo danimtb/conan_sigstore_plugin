@@ -110,7 +110,7 @@ To verify the packages, use the command:
 $ conan cache verify mypkg/1.0
 ```
 
-When the packages are downloaded from a remote, they will be automatically verified as well. This wil be typically done
+When the packages are downloaded from a remote, they will be automatically verified as well. This will be typically done
 when using the ``conan install`` command or similar.
 
 ## How does the plugin work?
@@ -118,7 +118,7 @@ when using the ``conan install`` command or similar.
 When the packages are signed with ``conan cache sign``, they follow this process:
   1. The Conan-generated ``pkgsign-manifest.json`` file is signed using ``cosign`` in the ``verify()`` function.
   2. The signature metadata is returned by the ``sign()`` method with the provider that signed the package, the method 
-     used (``sigstore``) and the artifacts that are part of the signature (the manifest and the buindle file that contains
+     used (``sigstore``) and the artifacts that are part of the signature (the manifest and the bundle file that contains
     the signature itself).
      The format of the returned metadata is the following:
      ```/
@@ -136,7 +136,7 @@ When the packages are signed with ``conan cache sign``, they follow this process
 When the packages are downloaded from a remote (with ``conan install`` command or similar) or when they are verified
 with ``conan cache verify``, the packages are verified following this process:
 
-  1. Conan checks the checksums of the `pkgsign-manifest.json`` file with the files in the package.
+  1. Conan checks the checksums of the ``pkgsign-manifest.json`` file with the files in the package.
   2. Then the bundle file with the signature ``artifact.sigstore.json`` is verified using ``cosign`` and the public key
      associated to the provider defined in the signature metadata (as explained earlier).
   3. If ``use_rekor`` is enabled, the signature of the package is also verified against the Rekor public log.
