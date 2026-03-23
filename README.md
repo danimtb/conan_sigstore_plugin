@@ -1,5 +1,7 @@
 # Conan Sigstore Plugin
 
+[![CI](https://img.shields.io/github/actions/workflow/status/danimtb/conan_sigstore_plugin/test_conan_extensions.yml?branch=main&label=CI)](https://github.com/danimtb/conan_sigstore_plugin/actions/workflows/test_conan_extensions.yml)
+
 Plugin for signing Conan packages using the [Sigstore tools](https://www.sigstore.dev/).
 
 The goal of this plugin is to serve as a base example on how to implement a plugin for signing and verifying Conan
@@ -8,7 +10,7 @@ packages, in this case, leveraging the tools provided by Sigstore with Cosign.
 **Feel free to clone this repo and modify the plugin with you own needs**.
 
 This plugin is implemented following the **package signing plugin interface**.
-Read more about it in the documentation: https://docs.conan.io/2/reference/extensions/package_signing.html
+Read more about it in the [documentation](https://docs.conan.io/2/reference/extensions/package_signing.html).
 
 ### Sigstore tools used by the plugin
 
@@ -17,9 +19,10 @@ Read more about it in the documentation: https://docs.conan.io/2/reference/exten
   infrastructure.
 
 - **[Rekor](https://docs.sigstore.dev/logging/overview/):** For storing the signatures in a public transparency log,
-  providing an additional layer of security and trust. This plugin uses the public Rekor server to register the signatures https://rekor.sigstore.dev/
+  providing an additional layer of security and trust. This plugin uses the public [Rekor](https://rekor.sigstore.dev/)
+  server to register the signatures.
 
-The following executables should be installed and in the PATH of your system.
+The following executables should be installed and in the ``PATH`` of your system.
 
 - ``cosign (>3.0.0)``: https://github.com/sigstore/cosign/releases
 
@@ -91,7 +94,7 @@ Each ``provider`` is set to be associated with a key.
 The environment variables take precedence over the configuration file, so you can set them in your system.
 The following environment variables are supported:
 
-- ``COSIGN_PASSWORD``: [Mandatory] Set the password of your private key. This is used to sign packages with the private key.
+- ``COSIGN_PASSWORD``: [Mandatory] Set the password of your private key.
 - ``CONAN_SIGN_PLUGIN_ENABLE_SIGN``: Enable plugin's sign feature (enabled by default).
 - ``CONAN_SIGN_PLUGIN_ENABLE_VERIFY``: Enable plugin's verify feature (enabled by default).
 - ``CONAN_SIGN_PLUGIN_ENABLE_REKOR``: Enable Rekor to register the signature and verifying it using its public transparency log (disabled by default).
