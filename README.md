@@ -112,6 +112,12 @@ $ conan cache verify mypkg/1.0
 
 Packages downloaded from a remote are verified automatically, for example when you run ``conan install`` or similar commands.
 
+
+
+https://github.com/user-attachments/assets/df328d2c-3eb1-4674-a438-8a1bd2a56677
+
+
+
 ## 🧩 How does the plugin work?
 
 When packages are signed with ``conan cache sign``, the flow is:
