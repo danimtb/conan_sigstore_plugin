@@ -24,7 +24,6 @@ import subprocess
 
 import yaml
 
-from conan.api.model.refs import PkgReference
 from conan.api.output import ConanOutput
 from conan.errors import ConanException
 
@@ -34,7 +33,7 @@ CONFIG_FILENAME = "sigstore-config.yaml"
 SIGNING_METHOD = "sigstore"
 
 
-CONFIG_TEMPLATE_CONTENT = """
+CONFIG_TEMPLATE_CONTENT = """\
 # This is the configuration file for the Conan Sigstore plugin, which allows signing and verifying Conan packages with
 # Sigstore's Cosign tool.
 # You can fill the sections below to configure the signing and verifying of your packages.
